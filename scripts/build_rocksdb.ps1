@@ -51,17 +51,47 @@ Write-Host "Configuring RocksDB..." -ForegroundColor Cyan
 
 # Setup MSVC environment for Ninja (PowerShell version)
 Write-Host "Setting up MSVC environment..." -ForegroundColor Cyan
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-if (Test-Path $vswhere) {
+$preferredVsPath = "C:\Program Files\Microsoft Visual Studio\18\Insiders"
+$vsPath = if (Test-Path $preferredVsPath) { $preferredVsPath } else { $null }
+
+if (-not $vsPath) {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        Write-Host "ERROR: vswhere.exe not found. Install Visual Studio Build Tools." -ForegroundColor Red
+        Set-Location $ProjectRoot
+        exit 1
+    }
+
     $vsPath = & $vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if ($vsPath) {
-        $vsDevShell = Join-Path $vsPath "Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
-        if (Test-Path $vsDevShell) {
-            Import-Module $vsDevShell
-            Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
-            Write-Host "MSVC environment configured" -ForegroundColor Green
+    if (-not $vsPath) {
+        Write-Host "ERROR: Visual Studio with C++ tools not found." -ForegroundColor Red
+        Set-Location $ProjectRoot
+        exit 1
+    }
+}
+
+$vsDevShell = Join-Path $vsPath "Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+$vcvars64 = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+
+if (Test-Path $vsDevShell) {
+    Import-Module $vsDevShell
+    Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
+    Write-Host "MSVC environment configured (DevShell)" -ForegroundColor Green
+} elseif (Test-Path $vcvars64) {
+    $envDump = cmd /c "call `"$vcvars64`" -arch=x64 -host_arch=x64 >nul && set"
+    foreach ($line in $envDump) {
+        $idx = $line.IndexOf('=')
+        if ($idx -gt 0) {
+            $name = $line.Substring(0, $idx)
+            $value = $line.Substring($idx + 1)
+            Set-Item -Path "Env:$name" -Value $value
         }
     }
+    Write-Host "MSVC environment configured (vcvars64.bat)" -ForegroundColor Green
+} else {
+    Write-Host "ERROR: vcvars64.bat not found under Visual Studio." -ForegroundColor Red
+    Set-Location $ProjectRoot
+    exit 1
 }
 
 # /FS is only needed for Debug builds (which generate PDB files with /Zi)

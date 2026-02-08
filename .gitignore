@@ -7,11 +7,7 @@
 /zig-pkg/
 
 # Test artifacts
-/test_cpp/build_*/
-/test_cpp/*.exe
-/test_cpp/*.ilk
-/test_cpp/*.pdb
+/test_cpp
 
 # Report issue build artifacts  
-/report_issue/zig-cache/
-/report_issue/zig-out/
+/report_issue
