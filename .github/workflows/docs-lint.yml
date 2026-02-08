@@ -1,0 +1,62 @@
+name: Docs Lint
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - '*.md'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '*.md'
+
+jobs:
+  markdown-lint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install markdownlint-cli2
+        run: npm install -g markdownlint-cli2
+
+      - name: Lint docs directory (if present)
+        run: |
+          if [ -d "docs" ]; then
+            echo "Linting docs/**/*.md"
+            npx markdownlint-cli2 "docs/**/*.md" --no-color
+          else
+            echo "No docs/ directory found — skipping docs lint step."
+          fi
+
+      - name: Lint allowed root Markdown files
+        run: |
+          for f in AGENTS.md README.md ROADMAP.md; do
+            if [ -f "$f" ]; then
+              echo "Linting $f"
+              npx markdownlint-cli2 "$f" --no-color
+            fi
+          done
+
+      - name: Fail on unexpected root Markdown files
+        run: |
+          shopt -s nullglob
+          extra_md=()
+          for f in *.md; do
+            case "$f" in
+              AGENTS.md|README.md|ROADMAP.md) ;;
+              *) extra_md+=("$f") ;;
+            esac
+          done
+          if [ ${#extra_md[@]} -ne 0 ]; then
+            echo "Unexpected Markdown files in repository root:";
+            printf '%s\n' "${extra_md[@]}";
+            exit 1
+          else
+            echo "No unexpected root Markdown files found."
+          fi
