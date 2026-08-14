@@ -1,4 +1,6 @@
 /.zig-cache
 /zig-out
+# Zig 0.16 unpacks fetched dependencies into a project-local package dir
+/zig-pkg
 /test-state
 /.vscode

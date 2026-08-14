@@ -1,0 +1,4 @@
+# Zig source must use LF line endings; `zig fmt --check` rejects CRLF.
+# Without this, a clone on Windows with core.autocrlf=true fails the lint job.
+*.zig text eol=lf
+*.zon text eol=lf
