@@ -2,7 +2,7 @@
     .name = .rocksdb,
     .fingerprint = 0xd916a6b24e94f0cf,
     .version = "9.7.4",
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .rocksdb = .{
             .url = "git+https://github.com/Syndica/rocksdb#3793e721c7795b338d9d7808544b75db6bde3548",

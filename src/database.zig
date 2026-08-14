@@ -3,7 +3,8 @@ const rdb = @import("rocksdb");
 const lib = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const RwLock = std.Thread.RwLock;
+const Io = std.Io;
+const RwLock = std.Io.RwLock;
 
 const Data = lib.Data;
 const Iterator = lib.Iterator;
@@ -16,6 +17,7 @@ const copyLen = lib.data.copyLen;
 
 pub const DB = struct {
     db: *rdb.rocksdb_t,
+    io: Io,
     default_cf: ?ColumnFamilyHandle = null,
     cf_name_to_handle: *CfNameToHandleMap,
 
@@ -23,6 +25,7 @@ pub const DB = struct {
 
     pub fn open(
         allocator: Allocator,
+        io: Io,
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
@@ -77,7 +80,7 @@ pub const DB = struct {
         // organize column family metadata
         const cf_list = try allocator.alloc(ColumnFamily, column_families.len);
         errdefer allocator.free(cf_list);
-        const cf_map = try CfNameToHandleMap.create(allocator);
+        const cf_map = try CfNameToHandleMap.create(allocator, io);
         errdefer cf_map.destroy();
         for (cf_list, 0..) |*cf, i| {
             const name = try allocator.dupe(u8, column_families[i].name);
@@ -90,7 +93,7 @@ pub const DB = struct {
         }
 
         return .{
-            Self{ .db = db.?, .cf_name_to_handle = cf_map },
+            Self{ .db = db.?, .io = io, .cf_name_to_handle = cf_map },
             cf_list,
         };
     }
@@ -98,6 +101,7 @@ pub const DB = struct {
     pub fn withDefaultColumnFamily(self: Self, column_family: ColumnFamilyHandle) Self {
         return .{
             .db = self.db,
+            .io = self.io,
             .cf_name_to_handle = self.cf_name_to_handle,
             .default_cf = column_family,
         };
@@ -128,7 +132,7 @@ pub const DB = struct {
             @ptrCast(name),
             @ptrCast(&ch.err_str_in),
         ), error.RocksDBCreateColumnFamily)).?;
-        self.cf_name_to_handle.put(name, handle);
+        try self.cf_name_to_handle.put(name, handle);
         return handle;
     }
 
@@ -266,11 +270,11 @@ pub const DB = struct {
     pub fn liveFiles(self: *const Self, allocator: Allocator) Allocator.Error!std.ArrayList(LiveFile) {
         const files = rdb.rocksdb_livefiles(self.db).?;
         const num_files: usize = @intCast(rdb.rocksdb_livefiles_count(files));
-        var livefiles = std.ArrayList(LiveFile).init(allocator);
+        var livefiles: std.ArrayList(LiveFile) = .empty;
         var key_size: usize = 0;
         for (0..num_files) |i| {
             const file_num: c_int = @intCast(i);
-            try livefiles.append(.{
+            try livefiles.append(allocator, .{
                 .allocator = allocator,
                 .column_family_name = try copy(allocator, rdb.rocksdb_livefiles_column_family_name(files, file_num)),
                 .name = try copy(allocator, rdb.rocksdb_livefiles_name(files, file_num)),
@@ -374,12 +378,13 @@ test "DB clean init and deinit" {
         pub fn run(allocator: Allocator) !void {
             var dir = std.testing.tmpDir(.{});
             defer dir.cleanup();
-            const path = try dir.dir.realpathAlloc(allocator, ".");
+            const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
             defer allocator.free(path);
 
             var data: ?Data = null;
             const db, const cfs = try DB.open(
                 allocator,
+                std.testing.io,
                 path,
                 .{
                     .create_if_missing = true,
@@ -508,17 +513,19 @@ const CallHandler = struct {
 
 const CfNameToHandleMap = struct {
     allocator: Allocator,
+    io: Io,
     map: std.StringHashMapUnmanaged(ColumnFamilyHandle),
     lock: RwLock,
 
     const Self = @This();
 
-    fn create(allocator: Allocator) Allocator.Error!*Self {
+    fn create(allocator: Allocator, io: Io) Allocator.Error!*Self {
         const self = try allocator.create(Self);
         self.* = .{
             .allocator = allocator,
+            .io = io,
             .map = .{},
-            .lock = .{},
+            .lock = .init,
         };
         return self;
     }
@@ -535,16 +542,19 @@ const CfNameToHandleMap = struct {
 
     fn put(self: *Self, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
         const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
 
-        self.lock.lock();
-        defer self.lock.unlock();
+        // `lockUncancelable` preserves the blocking semantics of the old
+        // `std.Thread.RwLock`, keeping this function's error set allocation-only.
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
 
-        self.map.put(self.allocator, owned_name, handle);
+        try self.map.put(self.allocator, owned_name, handle);
     }
 
     fn get(self: *Self, name: []const u8) ?ColumnFamilyHandle {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lockSharedUncancelable(self.io);
+        defer self.lock.unlockShared(self.io);
         return self.map.get(name);
     }
 };
@@ -553,7 +563,7 @@ test DB {
     var err_str: ?Data = null;
     defer if (err_str) |e| e.deinit();
     runTest(&err_str) catch |e| {
-        std.debug.print("{}: {?}\n", .{ e, err_str });
+        std.debug.print("{}: {?f}\n", .{ e, err_str });
         return e;
     };
 }
@@ -562,6 +572,7 @@ fn runTest(err_str: *?Data) !void {
     {
         var db, const families = try DB.open(
             std.testing.allocator,
+            std.testing.io,
             "test-state",
             .{
                 .create_if_missing = true,
@@ -602,6 +613,7 @@ fn runTest(err_str: *?Data) !void {
 
     var db, const families = try DB.open(
         std.testing.allocator,
+        std.testing.io,
         "test-state",
         .{
             .create_if_missing = true,
@@ -616,8 +628,8 @@ fn runTest(err_str: *?Data) !void {
     );
     defer db.deinit();
     defer std.testing.allocator.free(families);
-    const lfs = try db.liveFiles(std.testing.allocator);
-    defer lfs.deinit();
+    var lfs = try db.liveFiles(std.testing.allocator);
+    defer lfs.deinit(std.testing.allocator);
     defer for (lfs.items) |lf| lf.deinit();
     try std.testing.expect(std.mem.eql(u8, "another", lfs.items[0].column_family_name));
 }

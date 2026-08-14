@@ -2,7 +2,11 @@ Build and use RocksDB in zig.
 
 # Build Dependencies
 
-`rocksdb-zig` is pinned to [Zig `0.14.1`](https://ziglang.org/download/), so you will need to have it installed.
+`rocksdb-zig` is pinned to [Zig `0.16.0`](https://ziglang.org/download/), so you will need to have it installed.
+
+> **Note:** building natively on Windows is not supported — `build.zig` panics
+> with `TODO: support windows!`. Use Linux, macOS, or cross-compile with
+> `-Dtarget=`.
 
 # Usage
 

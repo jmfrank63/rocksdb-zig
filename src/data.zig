@@ -6,19 +6,14 @@ const Allocator = std.mem.Allocator;
 /// data that was allocated by rocksdb and must be freed by rocksdb
 pub const Data = struct {
     data: []const u8,
-    free: *const fn (?*anyopaque) callconv(.C) void,
+    free: *const fn (?*anyopaque) callconv(.c) void,
 
     pub fn deinit(self: @This()) void {
         self.free(@ptrCast(@constCast(self.data.ptr)));
     }
 
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        try std.fmt.formatBuf(self.data, options, writer);
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll(self.data);
     }
 };
 
