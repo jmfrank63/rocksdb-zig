@@ -182,10 +182,28 @@ working tree is correct regardless of the developer's `autocrlf` setting.
 
 ## Verification performed
 
+All verification was done by cross-compiling from a Windows host and executing
+the resulting binary under WSL, because `build.zig` cannot run natively on
+Windows (see below).
+
 - `zig build --help` — configure phase succeeds.
-- `zig build test -Dtarget=x86_64-linux-musl` — RocksDB C++ and the Zig test
-  binary compile and link cleanly.
-- Test binary executed under WSL (Windows cannot run Linux binaries directly).
+- `zig fmt --check src/ build.zig` — passes.
+- `zig build test -Dtarget=x86_64-linux-gnu` — RocksDB C++ and the Zig test
+  binary compile and link cleanly. This matches the CI target.
+- The resulting test binary, run under WSL:
+
+```
+1/5 lib.test_0...OK
+2/5 database.test.DB clean init and deinit...OK
+3/5 database.test.DBOptions defaults...OK
+4/5 database.test.DBOptions custom...OK
+5/5 database.decltest.DB...OK
+All 5 tests passed.
+```
+
+- `zig build test -Dtarget=x86_64-linux-musl` — compiles and links, but aborts
+  at runtime inside RocksDB for a reason unrelated to this migration (see
+  below).
 
 ## Known issues / follow-ups
 
@@ -205,7 +223,8 @@ migration.
 
 ### musl targets abort in RocksDB's cache (pre-existing)
 
-Running the musl build aborts inside RocksDB C++:
+The glibc build passes all tests; only musl is affected. Running the musl build
+aborts inside RocksDB C++:
 
 ```
 panic: constructor call on misaligned address ... for type 'LRUCacheShard',
