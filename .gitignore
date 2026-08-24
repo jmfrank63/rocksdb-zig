@@ -4,10 +4,13 @@
 
 # Build directories
 /build/
+
+# Zig 0.16 unpacks fetched dependencies into a project-local package dir
 /zig-pkg/
 
 # Test artifacts
 /test_cpp
+/test-state
 
-# Report issue build artifacts  
+# Report issue build artifacts
 /report_issue

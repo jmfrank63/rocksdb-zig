@@ -2,7 +2,6 @@
     .name = .rocksdb,
     .fingerprint = 0xd916a6b24e94f0cf,
     .version = "10.9.1",
-    .minimum_zig_version = "0.15.0",
     .dependencies = .{
         .rocksdb = .{
             .url = "git+https://github.com/facebook/rocksdb#v10.9.1",
@@ -14,6 +13,7 @@
             .lazy = true,
         },
     },
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",
