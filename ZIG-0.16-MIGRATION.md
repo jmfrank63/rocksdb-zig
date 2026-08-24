@@ -1,7 +1,14 @@
 # Zig 0.16 migration
 
-Status of `rocksdb-zig` against Zig **0.16.0**, and the changes made on branch
-`update-to-zig-0.16`.
+Status of `rocksdb-zig` against Zig **0.16.0**.
+
+This document originally covered the small upstream-tracking port on branch
+`update-to-zig-0.16`. It now describes branch `zig-0.16.0-full`, which merges
+that work into the `update_to_0.15.2` fork — the fork's vendored/MSVC build
+system, Windows port, transactions, checkpoints and backup engine are all
+carried forward and ported to 0.16.
+
+Target is Zig **0.16.0** only; 0.17-dev is explicitly out of scope.
 
 ## Did `master` work on 0.16?
 
@@ -102,17 +109,24 @@ The uppercase tag was removed.
 
 ## Breaking API change: `Io` is threaded through as a parameter
 
-Because `std.Io.RwLock` needs an `Io` for every lock operation, the two `DB`
-methods that touch the column-family map gained an `io` parameter:
+Because `std.Io.RwLock` needs an `Io` for every lock operation, the methods that
+touch the column-family map gained an `io` parameter. This applies to all three
+database types — `DB`, `TransactionDB` and `OptimisticTransactionDB`:
 
 ```zig
-const handle = try db.createColumnFamily(io, name, &err_str);
-const cf     = try db.columnFamily(io, "another");
+const db, const cfs = try DB.open(allocator, io, path, db_options, cfs, false, &err_str);
+const handle        = try db.createColumnFamily(io, name, &err_str);
+const cf            = try db.columnFamily(io, "another");
 ```
 
-`DB.open` is unchanged. `Io` is passed per call rather than stored on `DB` so
-these functions stay colorless — callable from both sync and async contexts,
-with the caller deciding which `Io` implementation applies at each call site.
+`open()` takes `io` as well, because it populates the locked map via
+`putUnowned()`. The alternative — having `open()` write to the map directly and
+skip the lock, on the grounds that the map is not yet shared — was rejected in
+favour of keeping the rule uniform.
+
+**No function stores an `Io`.** It is passed per call so every function stays
+colorless: callable from both sync and async contexts, with the caller deciding
+which `Io` implementation applies at each call site.
 
 `lockUncancelable` / `lockSharedUncancelable` are used internally so that
 `columnFamily()` and `createColumnFamily()` keep their existing error sets
@@ -146,15 +160,15 @@ were never semantically analysed, so they never surfaced as errors:
 
 | File | Change |
 | --- | --- |
-| `build.zig` | Route all C/link calls through `root_module`; `addTest` module; `ConfigHeader` output accessors |
-| `build.zig.zon` | `minimum_zig_version` → `0.16.0` |
-| `.github/workflows/check.yml` | Zig 0.14.1 → 0.16.0 |
-| `.gitignore` | Ignore the new `/zig-pkg` directory (see below) |
+| `build.zig` | `std.fs.cwd()` → `std.Io.Dir.cwd()` with `b.graph.io`; C/link calls routed through `root_module`; `ConfigHeader` output accessors. `TranslateC.getOutput()` deliberately untouched — it still exists in 0.16 |
+| `build.zig.zon` | `minimum_zig_version` → `0.16.0` (version stays `10.9.1`) |
+| `.github/workflows/check.yml` | Zig 0.15.2 → 0.16.0; the fork's Windows self-hosted test matrix is kept |
+| `.gitignore` | Union of both branches' entries |
 | `.gitattributes` | **New** — force LF for `*.zig` / `*.zon` (see below) |
-| `README.md` | Zig version bump; note that native Windows builds are unsupported |
-| `ZIG-0.16-MIGRATION.md` | **New** — this document |
-| `src/data.zig` | `callconv(.c)`; new `format` signature |
-| `src/database.zig` | `std.Io.RwLock` + `Io` parameter threading; `liveFiles` returns an owned slice; `Io.Dir` test paths; `{?f}`; latent bug fixes |
+| `ZIG-0.16-MIGRATION.md` | This document |
+| `src/data.zig` | `format` takes a concrete `*std.Io.Writer`; `std.io.fixedBufferStream` → `std.Io.Writer.fixed` |
+| `src/database.zig` | `std.Io.RwLock`; `io` threaded through `open`/`createColumnFamily`/`columnFamily` on all three DB types; `Io.Dir` paths |
+| `src/batch.zig`, `src/iterator.zig` | `Io.Dir` test paths; `io` at `open()` call sites |
 
 ## `zig-pkg/` — new in 0.16
 
@@ -186,49 +200,40 @@ working tree is correct regardless of the developer's `autocrlf` setting.
 
 ## Verification performed
 
-All verification was done by cross-compiling from a Windows host and executing
-the resulting binary under WSL, because `build.zig` cannot run natively on
-Windows (see below).
+All verification below was run **natively on Windows** with Zig 0.16.0, which
+the fork's build system supports.
 
 - `zig build --help` — configure phase succeeds.
 - `zig fmt --check src/ build.zig` — passes.
-- `zig build test -Dtarget=x86_64-linux-gnu` — RocksDB C++ and the Zig test
-  binary compile and link cleanly. This matches the CI target.
-- The resulting test binary, run under WSL:
-
-```
-1/5 lib.test_0...OK
-2/5 database.test.DB clean init and deinit...OK
-3/5 database.test.DBOptions defaults...OK
-4/5 database.test.DBOptions custom...OK
-5/5 database.decltest.DB...OK
-All 5 tests passed.
-```
-
-- `zig build test -Dtarget=x86_64-linux-musl` — compiles and links, but aborts
-  at runtime inside RocksDB for a reason unrelated to this migration (see
-  below).
+- `zig build test --summary all` — 115/116 pass, 1 skipped. The skip is the
+  fork's pre-existing `if (builtin.mode == .Debug) return error.SkipZigTest`,
+  not a regression.
+- `zig build --release=fast test --summary all` — **116/116 pass**. This is
+  CI's main job, and the Debug-only skip runs here.
+- `zig build --release=fast -Denable_c_api_static=true` — succeeds.
 
 ## Known issues / follow-ups
 
-### Windows is unsupported (pre-existing)
+### Windows is supported on this branch
 
-`build.zig` still contains:
+The upstream-tracking branch panicked with `TODO: support windows!` in
+`build.zig`. That is **resolved here**: the fork provides `OS_WIN`,
+`port/win/{env_win,io_win,win_logger,win_thread}.cc`, `rpcrt4`/`shlwapi`
+linkage, an MSVC path via `scripts/build_rocksdb.ps1`, and a vendored
+`vendor/rocksdb` submodule. All verification above ran natively on Windows.
 
-```zig
-} else {
-    @panic("TODO: support windows!");
-}
-```
-
-So `zig build` cannot run natively on Windows at all, on 0.14 or 0.16. All
-verification here was done by cross-compiling to Linux. This is unchanged by the
-migration.
+The MSVC configuration (`-Dtarget=native-windows-msvc
+-Duse_msvc_compiler=true`) additionally requires the submodule to be
+initialised (`git submodule update --init --recursive`) and a Visual Studio
+toolchain; it is exercised by CI on the `ghr-base-win` self-hosted runner
+rather than here.
 
 ### musl targets abort in RocksDB's cache (pre-existing)
 
-The glibc build passes all tests; only musl is affected. Running the musl build
-aborts inside RocksDB C++:
+Carried over from the upstream-tracking branch and **not re-verified here**,
+since verification on this branch is native Windows. Recorded so the finding is
+not lost. On that branch the glibc build passed all tests and only musl was
+affected, aborting inside RocksDB C++:
 
 ```
 panic: constructor call on misaligned address ... for type 'LRUCacheShard',
@@ -245,6 +250,7 @@ This is independent of the 0.16 migration. The fix would be to add
 `-D_POSIX_C_SOURCE=200112L` to `rocksdb_flags`, but that is deliberately left
 out of this branch to keep the migration scoped.
 
-### README still documents 0.14.1
+### README
 
-Updated as part of this branch.
+The fork's README is carried forward unchanged by the merge. It has not been
+re-checked for stale Zig version references.
