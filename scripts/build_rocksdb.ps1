@@ -51,6 +51,24 @@ Write-Host "Configuring RocksDB..." -ForegroundColor Cyan
 
 # Setup MSVC environment for Ninja (PowerShell version)
 Write-Host "Setting up MSVC environment..." -ForegroundColor Cyan
+
+# VsDevCmd.bat honours a pre-set VSINSTALLDIR and resolves its extension scripts
+# (core\msbuild.bat, ext\cmake.bat, ...) against it. When the parent environment
+# carries a stale value - e.g. a VS install that has since been removed, which
+# editors and terminals happily inherit - those extensions fail with
+# "init:FAILED code:1", VsDevCmd reports errors, and the VC environment is never
+# exported: cl.exe never lands on PATH. Clear the inherited VS/compiler variables
+# so initialisation starts from a clean slate.
+foreach ($stale in @(
+    'VSINSTALLDIR', 'VCINSTALLDIR', 'VCToolsInstallDir', 'DevEnvDir',
+    'INCLUDE', 'LIB', 'LIBPATH', 'CommandPromptType',
+    'VSCMD_VER', 'VSCMD_ARG_HOST_ARCH', 'VSCMD_ARG_TGT_ARCH'
+)) {
+    if (Test-Path "Env:$stale") {
+        Write-Host "  clearing inherited $stale" -ForegroundColor DarkGray
+        Remove-Item "Env:$stale" -ErrorAction SilentlyContinue
+    }
+}
 $preferredVsPath = "C:\Program Files\Microsoft Visual Studio\18\Insiders"
 $vsPath = if (Test-Path $preferredVsPath) { $preferredVsPath } else { $null }
 
