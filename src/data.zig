@@ -8,11 +8,11 @@ pub const Data = struct {
     data: []const u8,
     free: *const fn (?*anyopaque) callconv(.c) void,
 
-    pub fn deinit(self: @This()) void {
+    pub fn deinit(self: Data) void {
         self.free(@ptrCast(@constCast(self.data.ptr)));
     }
 
-    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    pub fn format(self: Data, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(self.data);
     }
 };

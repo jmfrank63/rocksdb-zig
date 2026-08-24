@@ -3,7 +3,6 @@ const rdb = @import("rocksdb");
 const lib = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const Io = std.Io;
 const RwLock = std.Io.RwLock;
 
 const Data = lib.Data;
@@ -17,7 +16,6 @@ const copyLen = lib.data.copyLen;
 
 pub const DB = struct {
     db: *rdb.rocksdb_t,
-    io: Io,
     default_cf: ?ColumnFamilyHandle = null,
     cf_name_to_handle: *CfNameToHandleMap,
 
@@ -25,7 +23,6 @@ pub const DB = struct {
 
     pub fn open(
         allocator: Allocator,
-        io: Io,
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
@@ -80,7 +77,7 @@ pub const DB = struct {
         // organize column family metadata
         const cf_list = try allocator.alloc(ColumnFamily, column_families.len);
         errdefer allocator.free(cf_list);
-        const cf_map = try CfNameToHandleMap.create(allocator, io);
+        const cf_map = try CfNameToHandleMap.create(allocator);
         errdefer cf_map.destroy();
         for (cf_list, 0..) |*cf, i| {
             const name = try allocator.dupe(u8, column_families[i].name);
@@ -93,7 +90,7 @@ pub const DB = struct {
         }
 
         return .{
-            Self{ .db = db.?, .io = io, .cf_name_to_handle = cf_map },
+            Self{ .db = db.?, .cf_name_to_handle = cf_map },
             cf_list,
         };
     }
@@ -101,7 +98,6 @@ pub const DB = struct {
     pub fn withDefaultColumnFamily(self: Self, column_family: ColumnFamilyHandle) Self {
         return .{
             .db = self.db,
-            .io = self.io,
             .cf_name_to_handle = self.cf_name_to_handle,
             .default_cf = column_family,
         };
@@ -109,8 +105,15 @@ pub const DB = struct {
 
     /// Closes the database and cleans up this struct's state.
     pub fn deinit(self: Self) void {
+        rdb.rocksdb_cancel_all_background_work(self.db, 1);
         self.cf_name_to_handle.destroy();
         rdb.rocksdb_close(self.db);
+    }
+
+    /// cancel all currently running background processes. if wait is true, wait
+    /// for all background work to be cancelled before returning.
+    pub fn cancelAllBackgroundWork(self: *const Self, wait: bool) void {
+        rdb.rocksdb_cancel_all_background_work(self.db, if (wait) 1 else 0);
     }
 
     /// Delete the entire database from the filesystem.
@@ -121,6 +124,7 @@ pub const DB = struct {
 
     pub fn createColumnFamily(
         self: *Self,
+        io: std.Io,
         name: []const u8,
         err_str: *?Data,
     ) !ColumnFamilyHandle {
@@ -132,15 +136,16 @@ pub const DB = struct {
             @ptrCast(name),
             @ptrCast(&ch.err_str_in),
         ), error.RocksDBCreateColumnFamily)).?;
-        try self.cf_name_to_handle.put(name, handle);
+        try self.cf_name_to_handle.put(io, name, handle);
         return handle;
     }
 
     pub fn columnFamily(
         self: *const Self,
+        io: std.Io,
         cf_name: []const u8,
     ) error{UnknownColumnFamily}!ColumnFamilyHandle {
-        return self.cf_name_to_handle.get(cf_name) orelse error.UnknownColumnFamily;
+        return self.cf_name_to_handle.get(io, cf_name) orelse error.UnknownColumnFamily;
     }
 
     pub fn put(
@@ -267,10 +272,14 @@ pub const DB = struct {
         return ri;
     }
 
-    pub fn liveFiles(self: *const Self, allocator: Allocator) Allocator.Error!std.ArrayList(LiveFile) {
+    pub fn liveFiles(self: *const Self, allocator: Allocator) Allocator.Error![]const LiveFile {
         const files = rdb.rocksdb_livefiles(self.db).?;
+        defer rdb.rocksdb_livefiles_destroy(files);
         const num_files: usize = @intCast(rdb.rocksdb_livefiles_count(files));
+
         var livefiles: std.ArrayList(LiveFile) = .empty;
+        defer livefiles.deinit(allocator);
+
         var key_size: usize = 0;
         for (0..num_files) |i| {
             const file_num: c_int = @intCast(i);
@@ -286,8 +295,8 @@ pub const DB = struct {
                 .num_deletions = rdb.rocksdb_livefiles_deletions(files, file_num),
             });
         }
-        rdb.rocksdb_livefiles_destroy(files);
-        return livefiles;
+
+        return try livefiles.toOwnedSlice(allocator);
     }
 
     pub fn propertyValueCf(
@@ -384,7 +393,6 @@ test "DB clean init and deinit" {
             var data: ?Data = null;
             const db, const cfs = try DB.open(
                 allocator,
-                std.testing.io,
                 path,
                 .{
                     .create_if_missing = true,
@@ -513,17 +521,15 @@ const CallHandler = struct {
 
 const CfNameToHandleMap = struct {
     allocator: Allocator,
-    io: Io,
     map: std.StringHashMapUnmanaged(ColumnFamilyHandle),
     lock: RwLock,
 
     const Self = @This();
 
-    fn create(allocator: Allocator, io: Io) Allocator.Error!*Self {
+    fn create(allocator: Allocator) Allocator.Error!*Self {
         const self = try allocator.create(Self);
         self.* = .{
             .allocator = allocator,
-            .io = io,
             .map = .{},
             .lock = .init,
         };
@@ -540,21 +546,21 @@ const CfNameToHandleMap = struct {
         self.allocator.destroy(self);
     }
 
-    fn put(self: *Self, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
+    fn put(self: *Self, io: std.Io, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
         // `lockUncancelable` preserves the blocking semantics of the old
         // `std.Thread.RwLock`, keeping this function's error set allocation-only.
-        self.lock.lockUncancelable(self.io);
-        defer self.lock.unlock(self.io);
+        self.lock.lockUncancelable(io);
+        defer self.lock.unlock(io);
 
         try self.map.put(self.allocator, owned_name, handle);
     }
 
-    fn get(self: *Self, name: []const u8) ?ColumnFamilyHandle {
-        self.lock.lockSharedUncancelable(self.io);
-        defer self.lock.unlockShared(self.io);
+    fn get(self: *Self, io: std.Io, name: []const u8) ?ColumnFamilyHandle {
+        self.lock.lockSharedUncancelable(io);
+        defer self.lock.unlockShared(io);
         return self.map.get(name);
     }
 };
@@ -569,10 +575,11 @@ test DB {
 }
 
 fn runTest(err_str: *?Data) !void {
+    const allocator = std.testing.allocator;
+
     {
         var db, const families = try DB.open(
-            std.testing.allocator,
-            std.testing.io,
+            allocator,
             "test-state",
             .{
                 .create_if_missing = true,
@@ -586,7 +593,7 @@ fn runTest(err_str: *?Data) !void {
             err_str,
         );
         defer db.deinit();
-        defer std.testing.allocator.free(families);
+        defer allocator.free(families);
         const a_family = families[1].handle;
 
         _ = try db.put(a_family, "hello", "world", err_str);
@@ -612,8 +619,7 @@ fn runTest(err_str: *?Data) !void {
     }
 
     var db, const families = try DB.open(
-        std.testing.allocator,
-        std.testing.io,
+        allocator,
         "test-state",
         .{
             .create_if_missing = true,
@@ -627,9 +633,12 @@ fn runTest(err_str: *?Data) !void {
         err_str,
     );
     defer db.deinit();
-    defer std.testing.allocator.free(families);
-    var lfs = try db.liveFiles(std.testing.allocator);
-    defer lfs.deinit(std.testing.allocator);
-    defer for (lfs.items) |lf| lf.deinit();
-    try std.testing.expect(std.mem.eql(u8, "another", lfs.items[0].column_family_name));
+    defer allocator.free(families);
+
+    const lfs = try db.liveFiles(allocator);
+    defer {
+        for (lfs) |lf| lf.deinit();
+        allocator.free(lfs);
+    }
+    try std.testing.expect(std.mem.eql(u8, "another", lfs[0].column_family_name));
 }

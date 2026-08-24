@@ -40,7 +40,10 @@ it takes a pre-built `root_module`.
 ### 3. `Step.ConfigHeader.getOutput()` split in two
 
 `getOutput()` was replaced by `getOutputDir()` and `getOutputFile()`. The old
-`getOutput().dirname()` idiom becomes `getOutputDir()`.
+`getOutput().dirname()` idiom becomes either `getOutputFile().dirname()` (what
+this repo uses, matching upstream) or the equivalent, more direct
+`getOutputDir()` — `getOutputFile()` is defined as `getOutputDir().path(...)`,
+so the two resolve to the same directory.
 
 ### 4. `std.Thread` lost all synchronization primitives
 
@@ -97,35 +100,36 @@ use of it kept working.
 
 The uppercase tag was removed.
 
-## Breaking API change: `DB.open` takes an `Io`
+## Breaking API change: `Io` is threaded through as a parameter
 
-Because `std.Io.RwLock` needs an `Io` for every lock operation, `DB` now stores
-one and `DB.open` gained a parameter:
+Because `std.Io.RwLock` needs an `Io` for every lock operation, the two `DB`
+methods that touch the column-family map gained an `io` parameter:
 
 ```zig
-const db, const cfs = try DB.open(
-    allocator,
-    io,          // <-- new, e.g. std.testing.io or your Io.Threaded instance
-    path,
-    db_options,
-    column_families,
-    for_read_only,
-    &err_str,
-);
+const handle = try db.createColumnFamily(io, name, &err_str);
+const cf     = try db.columnFamily(io, "another");
 ```
+
+`DB.open` is unchanged. `Io` is passed per call rather than stored on `DB` so
+these functions stay colorless — callable from both sync and async contexts,
+with the caller deciding which `Io` implementation applies at each call site.
 
 `lockUncancelable` / `lockSharedUncancelable` are used internally so that
 `columnFamily()` and `createColumnFamily()` keep their existing error sets
 rather than gaining `Io.Cancelable`.
 
-## Breaking API change: `DB.liveFiles` returns an unmanaged list
+## Breaking API change: `DB.liveFiles` returns an owned slice
 
-`liveFiles` still returns `std.ArrayList(LiveFile)`, but that type is unmanaged
-on 0.16, so callers must supply the allocator when freeing:
+`liveFiles` now returns `[]const LiveFile` instead of a `std.ArrayList`, and it
+destroys the underlying RocksDB livefiles handle before returning. Callers own
+the slice:
 
 ```zig
-var lfs = try db.liveFiles(allocator);
-defer lfs.deinit(allocator);   // was: lfs.deinit()
+const lfs = try db.liveFiles(allocator);
+defer {
+    for (lfs) |lf| lf.deinit();
+    allocator.free(lfs);
+}
 ```
 
 ## Incidental bugs fixed
@@ -150,7 +154,7 @@ were never semantically analysed, so they never surfaced as errors:
 | `README.md` | Zig version bump; note that native Windows builds are unsupported |
 | `ZIG-0.16-MIGRATION.md` | **New** — this document |
 | `src/data.zig` | `callconv(.c)`; new `format` signature |
-| `src/database.zig` | `std.Io.RwLock` + `Io` threading; unmanaged `ArrayList`; `Io.Dir` test paths; `{?f}`; latent bug fixes |
+| `src/database.zig` | `std.Io.RwLock` + `Io` parameter threading; `liveFiles` returns an owned slice; `Io.Dir` test paths; `{?f}`; latent bug fixes |
 
 ## `zig-pkg/` — new in 0.16
 

@@ -22,13 +22,7 @@ pub fn build(b: *Build) !void {
     });
     bindings_mod.addImport("rocksdb", rocksdb_mod);
 
-    const tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .root_source_file = b.path("src/lib.zig"),
-        }),
-    });
+    const tests = b.addTest(.{ .root_module = bindings_mod, .use_llvm = true });
     const test_step = b.step("test", "Run bindings tests");
     tests.root_module.addImport("rocksdb", rocksdb_mod);
     test_step.dependOn(&b.addRunArtifact(tests).step);
@@ -501,8 +495,8 @@ fn buildRocksDB(
             .HAVE_SYS_UIO_H_01 = 1,
         });
 
-        libsnappy.root_module.addIncludePath(build_version.getOutputDir());
-        librocksdb.root_module.addIncludePath(build_version.getOutputDir());
+        libsnappy.root_module.addIncludePath(build_version.getOutputFile().dirname());
+        librocksdb.root_module.addIncludePath(build_version.getOutputFile().dirname());
     }
 
     // platform dependent stuff
