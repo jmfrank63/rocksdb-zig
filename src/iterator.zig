@@ -164,7 +164,7 @@ test "RawIterator seek and bounds" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -172,6 +172,7 @@ test "RawIterator seek and bounds" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{.{ .name = "default" }},
@@ -210,7 +211,7 @@ test "Iterator on empty database returns no entries" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -218,6 +219,7 @@ test "Iterator on empty database returns no entries" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -243,7 +245,7 @@ test "RawIterator seek to non-existent key" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -251,6 +253,7 @@ test "RawIterator seek to non-existent key" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -287,7 +290,7 @@ test "Iterator reverse direction" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -295,6 +298,7 @@ test "Iterator reverse direction" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -330,7 +334,7 @@ test "Iterator with seek position" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -338,6 +342,7 @@ test "Iterator with seek position" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -368,7 +373,7 @@ test "Iterator cleanup after exhaustion" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -376,6 +381,7 @@ test "Iterator cleanup after exhaustion" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -409,7 +415,7 @@ test "RawIterator multiple operations" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -417,6 +423,7 @@ test "RawIterator multiple operations" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,

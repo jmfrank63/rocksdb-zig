@@ -71,7 +71,7 @@ test "WriteBatch put/delete" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -79,6 +79,7 @@ test "WriteBatch put/delete" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{.{ .name = "default" }},
@@ -116,7 +117,7 @@ test "WriteBatch delete non-existent key" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -124,6 +125,7 @@ test "WriteBatch delete non-existent key" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -148,7 +150,7 @@ test "WriteBatch put empty value" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -156,6 +158,7 @@ test "WriteBatch put empty value" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -185,7 +188,7 @@ test "WriteBatch delete range" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -193,6 +196,7 @@ test "WriteBatch delete range" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -232,7 +236,7 @@ test "WriteBatch multiple operations and cleanup" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -240,6 +244,7 @@ test "WriteBatch multiple operations and cleanup" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -282,7 +287,7 @@ test "WriteBatch empty batch write" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?lib.Data = null;
@@ -290,6 +295,7 @@ test "WriteBatch empty batch write" {
 
     var db, const families = try database.DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,

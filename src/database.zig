@@ -3,7 +3,7 @@ const rdb = @import("rocksdb");
 const lib = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const RwLock = std.Thread.RwLock;
+const RwLock = std.Io.RwLock;
 
 const Data = lib.Data;
 const Iterator = lib.Iterator;
@@ -73,6 +73,7 @@ pub const DB = struct {
 
     pub fn open(
         allocator: Allocator,
+        io: std.Io,
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
@@ -154,7 +155,7 @@ pub const DB = struct {
                 .handle = cf_handles[i].?,
             };
             // Don't duplicate name again - putUnowned stores the handle without owning the name
-            try cf_map.putUnowned(name, cf_handles[i].?);
+            try cf_map.putUnowned(io, name, cf_handles[i].?);
             // Only increment after everything succeeds - this prevents double-free
             initialized_count = i + 1;
         }
@@ -209,6 +210,7 @@ pub const DB = struct {
 
     pub fn createColumnFamily(
         self: *Self,
+        io: std.Io,
         name: []const u8,
         err_str: *?Data,
     ) !ColumnFamilyHandle {
@@ -221,15 +223,16 @@ pub const DB = struct {
             @ptrCast(name),
             @ptrCast(&ch.err_str_in),
         ), error.RocksDBCreateColumnFamily)).?;
-        try self.cf_name_to_handle.put(name, handle);
+        try self.cf_name_to_handle.put(io, name, handle);
         return handle;
     }
 
     pub fn columnFamily(
         self: *const Self,
+        io: std.Io,
         cf_name: []const u8,
     ) error{UnknownColumnFamily}!ColumnFamilyHandle {
-        return self.cf_name_to_handle.get(cf_name) orelse error.UnknownColumnFamily;
+        return self.cf_name_to_handle.get(io, cf_name) orelse error.UnknownColumnFamily;
     }
 
     pub fn put(
@@ -853,6 +856,7 @@ pub const TransactionDB = struct {
 
     pub fn open(
         allocator: Allocator,
+        io: std.Io,
         dir: []const u8,
         db_options: DBOptions,
         txn_db_options: TransactionDBOptions,
@@ -917,7 +921,7 @@ pub const TransactionDB = struct {
             const name = try allocator.dupe(u8, column_families[i].name);
             errdefer allocator.free(name);
             cf.* = .{ .name = name, .handle = cf_handles[i].? };
-            try cf_map.putUnowned(name, cf_handles[i].?);
+            try cf_map.putUnowned(io, name, cf_handles[i].?);
             initialized_count = i + 1;
         }
 
@@ -940,6 +944,7 @@ pub const TransactionDB = struct {
 
     pub fn createColumnFamily(
         self: *Self,
+        io: std.Io,
         name: []const u8,
         err_str: *?Data,
     ) !ColumnFamilyHandle {
@@ -952,15 +957,16 @@ pub const TransactionDB = struct {
             @ptrCast(name),
             @ptrCast(&ch.err_str_in),
         ), error.RocksDBCreateColumnFamily)).?;
-        try self.cf_name_to_handle.put(name, handle);
+        try self.cf_name_to_handle.put(io, name, handle);
         return handle;
     }
 
     pub fn columnFamily(
         self: *const Self,
+        io: std.Io,
         cf_name: []const u8,
     ) error{UnknownColumnFamily}!ColumnFamilyHandle {
-        return self.cf_name_to_handle.get(cf_name) orelse error.UnknownColumnFamily;
+        return self.cf_name_to_handle.get(io, cf_name) orelse error.UnknownColumnFamily;
     }
 
     pub fn beginTransaction(
@@ -1107,6 +1113,7 @@ pub const OptimisticTransactionDB = struct {
 
     pub fn open(
         allocator: Allocator,
+        io: std.Io,
         dir: []const u8,
         db_options: DBOptions,
         maybe_column_families: ?[]const ColumnFamilyDescription,
@@ -1166,7 +1173,7 @@ pub const OptimisticTransactionDB = struct {
             const name = try allocator.dupe(u8, column_families[i].name);
             errdefer allocator.free(name);
             cf.* = .{ .name = name, .handle = cf_handles[i].? };
-            try cf_map.putUnowned(name, cf_handles[i].?);
+            try cf_map.putUnowned(io, name, cf_handles[i].?);
             initialized_count = i + 1;
         }
 
@@ -1189,6 +1196,7 @@ pub const OptimisticTransactionDB = struct {
 
     pub fn createColumnFamily(
         self: *Self,
+        io: std.Io,
         name: []const u8,
         err_str: *?Data,
     ) !ColumnFamilyHandle {
@@ -1202,15 +1210,16 @@ pub const OptimisticTransactionDB = struct {
             @ptrCast(name),
             @ptrCast(&ch.err_str_in),
         ), error.RocksDBCreateColumnFamily)).?;
-        try self.cf_name_to_handle.put(name, handle);
+        try self.cf_name_to_handle.put(io, name, handle);
         return handle;
     }
 
     pub fn columnFamily(
         self: *const Self,
+        io: std.Io,
         cf_name: []const u8,
     ) error{UnknownColumnFamily}!ColumnFamilyHandle {
-        return self.cf_name_to_handle.get(cf_name) orelse error.UnknownColumnFamily;
+        return self.cf_name_to_handle.get(io, cf_name) orelse error.UnknownColumnFamily;
     }
 
     pub fn beginTransaction(
@@ -2302,12 +2311,13 @@ test "DB clean init and deinit" {
         pub fn run(allocator: Allocator) !void {
             var dir = std.testing.tmpDir(.{});
             defer dir.cleanup();
-            const path = try dir.dir.realpathAlloc(allocator, ".");
+            const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
             defer allocator.free(path);
 
             var data: ?Data = null;
             const db, const cfs = try DB.open(
                 allocator,
+                std.testing.io,
                 path,
                 .{
                     .create_if_missing = true,
@@ -2377,7 +2387,7 @@ test "DBOptions with block_size" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2385,6 +2395,7 @@ test "DBOptions with block_size" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2410,7 +2421,7 @@ test "DBOptions with block_cache" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2418,6 +2429,7 @@ test "DBOptions with block_cache" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2443,7 +2455,7 @@ test "DB.destroy removes database" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2453,6 +2465,7 @@ test "DB.destroy removes database" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{ .create_if_missing = true },
             null,
@@ -2474,6 +2487,7 @@ test "DB.destroy removes database" {
     // Try to open the destroyed database without create_if_missing - should fail
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = false },
         null,
@@ -2487,7 +2501,7 @@ test "DBOptions accepts compression_opts (smoke test)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2496,6 +2510,7 @@ test "DBOptions accepts compression_opts (smoke test)" {
     // Test with custom compression options
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2530,7 +2545,7 @@ test "DBOptions accepts statistics (smoke test)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2539,6 +2554,7 @@ test "DBOptions accepts statistics (smoke test)" {
     // Test with statistics enabled
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2580,7 +2596,7 @@ test "DBOptions accepts disabled statistics (smoke test)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2589,6 +2605,7 @@ test "DBOptions accepts disabled statistics (smoke test)" {
     // Test with statistics explicitly disabled (default)
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2615,7 +2632,7 @@ test "DBOptions compaction and wal limits applied" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2623,6 +2640,7 @@ test "DBOptions compaction and wal limits applied" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2654,7 +2672,7 @@ test "TransactionDB commit and rollback" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2662,6 +2680,7 @@ test "TransactionDB commit and rollback" {
 
     var db, const families = try TransactionDB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2722,7 +2741,7 @@ test "Transaction snapshot mismatch guard" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2730,6 +2749,7 @@ test "Transaction snapshot mismatch guard" {
 
     var db, const families = try TransactionDB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2759,7 +2779,7 @@ test "OptimisticTransactionDB commit" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -2767,6 +2787,7 @@ test "OptimisticTransactionDB commit" {
 
     var db, const families = try OptimisticTransactionDB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -2976,7 +2997,7 @@ const CfNameToHandleMap = struct {
             .allocator = allocator,
             .map = .{},
             .owned_names = .{},
-            .lock = .{},
+            .lock = .init,
         };
         return self;
     }
@@ -2996,28 +3017,30 @@ const CfNameToHandleMap = struct {
         self.allocator.destroy(self);
     }
 
-    fn put(self: *Self, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
+    fn put(self: *Self, io: std.Io, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
-        self.lock.lock();
-        defer self.lock.unlock();
+        // `lockUncancelable` preserves the blocking semantics of the old
+        // `std.Thread.RwLock`, keeping this function's error set allocation-only.
+        self.lock.lockUncancelable(io);
+        defer self.lock.unlock(io);
 
         try self.map.put(self.allocator, owned_name, handle);
         try self.owned_names.put(self.allocator, owned_name, {});
     }
 
-    fn putUnowned(self: *Self, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
-        self.lock.lock();
-        defer self.lock.unlock();
+    fn putUnowned(self: *Self, io: std.Io, name: []const u8, handle: ColumnFamilyHandle) Allocator.Error!void {
+        self.lock.lockUncancelable(io);
+        defer self.lock.unlock(io);
 
         try self.map.put(self.allocator, name, handle);
         // Don't add to owned_names - we don't own this string
     }
 
-    fn get(self: *Self, name: []const u8) ?ColumnFamilyHandle {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+    fn get(self: *Self, io: std.Io, name: []const u8) ?ColumnFamilyHandle {
+        self.lock.lockSharedUncancelable(io);
+        defer self.lock.unlockShared(io);
         return self.map.get(name);
     }
 };
@@ -3035,12 +3058,13 @@ fn runTest(err_str: *?Data) !void {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{
                 .create_if_missing = true,
@@ -3081,6 +3105,7 @@ fn runTest(err_str: *?Data) !void {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -3116,7 +3141,7 @@ test "Get non-existent key returns null" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3124,6 +3149,7 @@ test "Get non-existent key returns null" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3144,7 +3170,7 @@ test "Delete non-existent key succeeds" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3152,6 +3178,7 @@ test "Delete non-existent key succeeds" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3172,7 +3199,7 @@ test "Unknown column family lookup fails" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3180,6 +3207,7 @@ test "Unknown column family lookup fails" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{.{ .name = "default" }},
@@ -3189,7 +3217,7 @@ test "Unknown column family lookup fails" {
     defer db.deinit();
     defer DB.freeColumnFamilies(allocator, families);
 
-    const result = db.columnFamily("nonexistent");
+    const result = db.columnFamily(std.testing.io, "nonexistent");
     try std.testing.expectError(error.UnknownColumnFamily, result);
 }
 
@@ -3197,7 +3225,7 @@ test "Put and retrieve empty values" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3205,6 +3233,7 @@ test "Put and retrieve empty values" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3229,7 +3258,7 @@ test "Iterator on empty database" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3237,6 +3266,7 @@ test "Iterator on empty database" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3260,7 +3290,7 @@ test "Delete range with same start and end key" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3268,6 +3298,7 @@ test "Delete range with same start and end key" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3292,7 +3323,7 @@ test "Error: Open non-existent DB with create_if_missing=false" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3300,6 +3331,7 @@ test "Error: Open non-existent DB with create_if_missing=false" {
 
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = false },
         null,
@@ -3316,7 +3348,7 @@ test "Error: Open DB with missing column family" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3326,6 +3358,7 @@ test "Error: Open DB with missing column family" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{ .create_if_missing = true },
             null,
@@ -3339,6 +3372,7 @@ test "Error: Open DB with missing column family" {
     // Try to open with a non-existent CF without create_missing_column_families
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_missing_column_families = false },
         &.{
@@ -3357,7 +3391,7 @@ test "LiveFile cleanup verification" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3365,6 +3399,7 @@ test "LiveFile cleanup verification" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{.{ .name = "default" }},
@@ -3406,7 +3441,7 @@ test "Column family handle cleanup" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3414,6 +3449,7 @@ test "Column family handle cleanup" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{
@@ -3444,7 +3480,7 @@ test "Flag: create_missing_column_families independent from create_if_missing" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3454,6 +3490,7 @@ test "Flag: create_missing_column_families independent from create_if_missing" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{ .create_if_missing = true },
             null,
@@ -3467,6 +3504,7 @@ test "Flag: create_missing_column_families independent from create_if_missing" {
     // This should succeed because create_missing_column_families = true
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_missing_column_families = true },
         &.{
@@ -3486,7 +3524,7 @@ test "Flag: LiveFile retrieval without ordering assumptions" {
     // Use tmpDir instead of hardcoded "test-state"
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3494,6 +3532,7 @@ test "Flag: LiveFile retrieval without ordering assumptions" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{
@@ -3560,7 +3599,7 @@ test "Cleanup: Options are properly destroyed" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3570,6 +3609,7 @@ test "Cleanup: Options are properly destroyed" {
     for (0..5) |_| {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{ .create_if_missing = true },
             null,
@@ -3588,7 +3628,7 @@ test "create_missing_column_families independent from create_if_missing" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3598,6 +3638,7 @@ test "create_missing_column_families independent from create_if_missing" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{ .create_if_missing = true, .create_missing_column_families = false },
             null,
@@ -3612,6 +3653,7 @@ test "create_missing_column_families independent from create_if_missing" {
     // This should succeed and create the missing CF
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = false, .create_missing_column_families = true },
         &.{
@@ -3634,7 +3676,7 @@ test "CfNameToHandleMap.put allocation failure" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3642,6 +3684,7 @@ test "CfNameToHandleMap.put allocation failure" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3653,10 +3696,10 @@ test "CfNameToHandleMap.put allocation failure" {
 
     // Successfully create a CF to verify createColumnFamily works
     // and that CfNameToHandleMap.put properly propagates errors
-    const handle = try db.createColumnFamily("test_cf", &err_str);
+    const handle = try db.createColumnFamily(std.testing.io, "test_cf", &err_str);
 
     // Verify the CF was added to the map by getting it back
-    const retrieved = try db.columnFamily("test_cf");
+    const retrieved = try db.columnFamily(std.testing.io, "test_cf");
     try std.testing.expect(retrieved == handle);
 }
 
@@ -3664,7 +3707,7 @@ test "DBOptions with custom write settings" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3673,6 +3716,7 @@ test "DBOptions with custom write settings" {
     // Open database with custom write buffer settings
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -3719,7 +3763,7 @@ test "WriteOptions with sync enabled" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3727,6 +3771,7 @@ test "WriteOptions with sync enabled" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3752,7 +3797,7 @@ test "WriteOptions with WAL disabled" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3760,6 +3805,7 @@ test "WriteOptions with WAL disabled" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3785,7 +3831,7 @@ test "WriteBatch with custom WriteOptions" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3793,6 +3839,7 @@ test "WriteBatch with custom WriteOptions" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3848,7 +3895,7 @@ test "ReadOptions with verify_checksums" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3856,6 +3903,7 @@ test "ReadOptions with verify_checksums" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3881,7 +3929,7 @@ test "ReadOptions with readahead" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3889,6 +3937,7 @@ test "ReadOptions with readahead" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3925,7 +3974,7 @@ test "ReadOptions with fill_cache disabled" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3933,6 +3982,7 @@ test "ReadOptions with fill_cache disabled" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -3958,7 +4008,7 @@ test "DBOptions with compression types" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -3968,6 +4018,7 @@ test "DBOptions with compression types" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{
                 .create_if_missing = true,
@@ -3994,6 +4045,7 @@ test "DBOptions with compression types" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             path,
             .{
                 .compression = .lz4,
@@ -4027,7 +4079,7 @@ test "DBOptions with direct I/O" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4037,6 +4089,7 @@ test "DBOptions with direct I/O" {
     // This test verifies the option is accepted, not that it's necessarily used
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4086,7 +4139,7 @@ test "DBOptions with dynamic max_manifest_space_amp_pct (smoke test)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4098,6 +4151,7 @@ test "DBOptions with dynamic max_manifest_space_amp_pct (smoke test)" {
     // rocksdb_options_set_max_manifest_space_amp_pct, this will be set pre-open instead.
     var db, const families = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4132,7 +4186,7 @@ test "DBOptions with dynamic target_file_size_is_upper_bound (smoke test)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4144,6 +4198,7 @@ test "DBOptions with dynamic target_file_size_is_upper_bound (smoke test)" {
     // rocksdb_options_set_target_file_size_is_upper_bound, this will be set pre-open instead.
     var db, const families = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4178,7 +4233,7 @@ test "DBOptions with multiple dynamic options (smoke test)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4190,6 +4245,7 @@ test "DBOptions with multiple dynamic options (smoke test)" {
     // these will be set pre-open instead.
     var db, const families = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4249,7 +4305,7 @@ test "Snapshot provides consistent point-in-time reads" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4257,6 +4313,7 @@ test "Snapshot provides consistent point-in-time reads" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4308,7 +4365,7 @@ test "WriteOptions with low_pri flag" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4316,6 +4373,7 @@ test "WriteOptions with low_pri flag" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4353,7 +4411,7 @@ test "Low-priority writes with batch and flush" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4361,6 +4419,7 @@ test "Low-priority writes with batch and flush" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4415,7 +4474,7 @@ test "Snapshot lifecycle - release prevents further use" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4423,6 +4482,7 @@ test "Snapshot lifecycle - release prevents further use" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4456,7 +4516,7 @@ test "Snapshot lifecycle - all released before deinit" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4464,6 +4524,7 @@ test "Snapshot lifecycle - all released before deinit" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4493,7 +4554,7 @@ test "Iterator with snapshot sees stable view" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4501,6 +4562,7 @@ test "Iterator with snapshot sees stable view" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4558,7 +4620,7 @@ test "Dynamic options invalid value returns error" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4568,6 +4630,7 @@ test "Dynamic options invalid value returns error" {
     // This test documents the error handling path and ensures no crashes
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4602,7 +4665,7 @@ test "Dynamic options both set simultaneously" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4611,6 +4674,7 @@ test "Dynamic options both set simultaneously" {
     // Test both dynamic options at once - exercises multi-option path
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4651,7 +4715,7 @@ test "Dynamic options all set simultaneously" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4660,6 +4724,7 @@ test "Dynamic options all set simultaneously" {
     // Test all dynamic options at once - exercises three-slot limit
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4701,7 +4766,7 @@ test "Block cache capacity property verification" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4710,6 +4775,7 @@ test "Block cache capacity property verification" {
     const cache_size: usize = 8 * 1024 * 1024; // 8MB
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4743,7 +4809,7 @@ test "Block-based options with bloom filter and index settings" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4751,6 +4817,7 @@ test "Block-based options with bloom filter and index settings" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4780,7 +4847,7 @@ test "ReadOptions composition - snapshot + verify_checksums + no fill_cache" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4788,6 +4855,7 @@ test "ReadOptions composition - snapshot + verify_checksums + no fill_cache" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4830,7 +4898,7 @@ test "Iterator with readahead in reverse direction" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4838,6 +4906,7 @@ test "Iterator with readahead in reverse direction" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4875,7 +4944,7 @@ test "CfNameToHandleMap concurrent access" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4883,6 +4952,7 @@ test "CfNameToHandleMap concurrent access" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -4952,7 +5022,7 @@ test "DBOptions with compaction file sizing" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -4960,6 +5030,7 @@ test "DBOptions with compaction file sizing" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -4996,7 +5067,7 @@ test "DBOptions with dynamic level bytes and write performance options" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5004,6 +5075,7 @@ test "DBOptions with dynamic level bytes and write performance options" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{
             .create_if_missing = true,
@@ -5041,7 +5113,7 @@ test "Manual compaction via compactRange" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5049,6 +5121,7 @@ test "Manual compaction via compactRange" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         null,
@@ -5088,7 +5161,7 @@ test "MergeOperator.createStringAppend basic" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5099,6 +5172,7 @@ test "MergeOperator.createStringAppend basic" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         &.{.{ .name = "default", .options = .{ .merge_operator = &merge_op } }},
@@ -5125,7 +5199,7 @@ test "MergeOperator.createStringAppend with existing value" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5135,6 +5209,7 @@ test "MergeOperator.createStringAppend with existing value" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         &.{.{ .name = "default", .options = .{ .merge_operator = &merge_op } }},
@@ -5161,7 +5236,7 @@ test "MergeOperator.createUInt64Add basic" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5171,6 +5246,7 @@ test "MergeOperator.createUInt64Add basic" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         &.{.{ .name = "default", .options = .{ .merge_operator = &merge_op } }},
@@ -5207,7 +5283,7 @@ test "MergeOperator.createMax basic" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5217,6 +5293,7 @@ test "MergeOperator.createMax basic" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         &.{.{ .name = "default", .options = .{ .merge_operator = &merge_op } }},
@@ -5244,7 +5321,7 @@ test "MergeOperator with multiple column families" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5257,6 +5334,7 @@ test "MergeOperator with multiple column families" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &.{
@@ -5321,7 +5399,7 @@ test "MergeOperator handle is nulled after DB.open" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5331,6 +5409,7 @@ test "MergeOperator handle is nulled after DB.open" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         &.{.{ .name = "default", .options = .{ .merge_operator = &merge_op } }},
@@ -5353,7 +5432,7 @@ test "MergeOperator cannot be reused for multiple column families" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5366,6 +5445,7 @@ test "MergeOperator cannot be reused for multiple column families" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true },
         &cfs,
@@ -5389,7 +5469,7 @@ test "MergeOperator reuse across column families fails" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5405,6 +5485,7 @@ test "MergeOperator reuse across column families fails" {
 
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &cfs,
@@ -5423,7 +5504,7 @@ test "MergeOperator reuse across CFs fails (TransactionDB)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5492,6 +5573,7 @@ test "MergeOperator reuse across CFs fails (TransactionDB)" {
 
     const result = TransactionDB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         .{},
@@ -5508,7 +5590,7 @@ test "MergeOperator reuse across CFs fails (OptimisticTransactionDB)" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5577,6 +5659,7 @@ test "MergeOperator reuse across CFs fails (OptimisticTransactionDB)" {
 
     const result = OptimisticTransactionDB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &cfs,
@@ -5592,7 +5675,7 @@ test "MergeOperator reuse error releases merge operator" {
     const allocator = std.testing.allocator;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
-    const path = try dir.dir.realpathAlloc(allocator, ".");
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(path);
 
     var err_str: ?Data = null;
@@ -5661,6 +5744,7 @@ test "MergeOperator reuse error releases merge operator" {
 
     const result = DB.open(
         allocator,
+        std.testing.io,
         path,
         .{ .create_if_missing = true, .create_missing_column_families = true },
         &cfs,
@@ -5808,12 +5892,12 @@ test "Checkpoint.create saves consistent snapshot" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var checkpoint_dir = std.testing.tmpDir(.{});
     defer checkpoint_dir.cleanup();
-    const checkpoint_path = try checkpoint_dir.dir.realpathAlloc(allocator, ".");
+    const checkpoint_path = try checkpoint_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(checkpoint_path);
     const checkpoint_subdir = try std.fs.path.join(allocator, &.{ checkpoint_path, "checkpoint" });
     defer allocator.free(checkpoint_subdir);
@@ -5824,6 +5908,7 @@ test "Checkpoint.create saves consistent snapshot" {
     // Create and populate database
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         db_path,
         .{ .create_if_missing = true },
         null,
@@ -5845,20 +5930,20 @@ test "Checkpoint.create saves consistent snapshot" {
     try checkpoint.create(checkpoint_subdir, 0, &err_str);
 
     // Verify checkpoint directory exists and is accessible
-    var dir = try std.fs.cwd().openDir(checkpoint_subdir, .{});
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(std.testing.io, checkpoint_subdir, .{});
+    defer dir.close(std.testing.io);
 }
 
 test "BackupEngine.createNewBackup creates incremental backup" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var err_str: ?Data = null;
@@ -5867,6 +5952,7 @@ test "BackupEngine.createNewBackup creates incremental backup" {
     // Create and populate database
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         db_path,
         .{
             .create_if_missing = true,
@@ -5901,12 +5987,12 @@ test "BackupEngine.getBackupInfo lists backups with metadata" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var err_str: ?Data = null;
@@ -5914,6 +6000,7 @@ test "BackupEngine.getBackupInfo lists backups with metadata" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         db_path,
         .{ .create_if_missing = true },
         null,
@@ -5946,12 +6033,12 @@ test "BackupEngine.purgeOldBackups removes excess backups" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var err_str: ?Data = null;
@@ -5959,6 +6046,7 @@ test "BackupEngine.purgeOldBackups removes excess backups" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         db_path,
         .{ .create_if_missing = true },
         null,
@@ -6001,12 +6089,12 @@ test "BackupEngine.verifyBackup checks backup integrity" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var err_str: ?Data = null;
@@ -6014,6 +6102,7 @@ test "BackupEngine.verifyBackup checks backup integrity" {
 
     var db, const families = try DB.open(
         allocator,
+        std.testing.io,
         db_path,
         .{ .create_if_missing = true },
         null,
@@ -6042,17 +6131,17 @@ test "BackupEngine MINIMAL restore test" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var restore_dir = std.testing.tmpDir(.{});
     defer restore_dir.cleanup();
-    const restore_base = try restore_dir.dir.realpathAlloc(allocator, ".");
+    const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
     // THIS IS THE KEY DIFFERENCE - full test uses a subdirectory!
     const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
@@ -6065,6 +6154,7 @@ test "BackupEngine MINIMAL restore test" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             db_path,
             .{
                 .create_if_missing = true,
@@ -6100,6 +6190,7 @@ test "BackupEngine MINIMAL restore test" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             restore_path,
             .{
                 .create_if_missing = false,
@@ -6134,17 +6225,17 @@ test "BackupEngine.restoreFromLatestBackup restores data correctly" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var restore_dir = std.testing.tmpDir(.{});
     defer restore_dir.cleanup();
-    const restore_base = try restore_dir.dir.realpathAlloc(allocator, ".");
+    const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
     const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
@@ -6156,6 +6247,7 @@ test "BackupEngine.restoreFromLatestBackup restores data correctly" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             db_path,
             .{
                 .create_if_missing = true,
@@ -6193,6 +6285,7 @@ test "BackupEngine.restoreFromLatestBackup restores data correctly" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             restore_path,
             .{
                 .create_if_missing = false,
@@ -6226,17 +6319,17 @@ test "BackupEngine.restoreFromBackup restores specific backup by ID" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var restore_dir = std.testing.tmpDir(.{});
     defer restore_dir.cleanup();
-    const restore_base = try restore_dir.dir.realpathAlloc(allocator, ".");
+    const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
     const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
@@ -6248,6 +6341,7 @@ test "BackupEngine.restoreFromBackup restores specific backup by ID" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             db_path,
             .{
                 .create_if_missing = true,
@@ -6292,6 +6386,7 @@ test "BackupEngine.restoreFromBackup restores specific backup by ID" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             restore_path,
             .{
                 .create_if_missing = false,
@@ -6320,17 +6415,17 @@ test "RestoreOptions.keep_log_files preserves WAL during restore" {
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
     defer db_dir.cleanup();
-    const db_path = try db_dir.dir.realpathAlloc(allocator, ".");
+    const db_path = try db_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(db_path);
 
     var backup_dir = std.testing.tmpDir(.{});
     defer backup_dir.cleanup();
-    const backup_path = try backup_dir.dir.realpathAlloc(allocator, ".");
+    const backup_path = try backup_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(backup_path);
 
     var restore_dir = std.testing.tmpDir(.{});
     defer restore_dir.cleanup();
-    const restore_base = try restore_dir.dir.realpathAlloc(allocator, ".");
+    const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
     const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
@@ -6342,6 +6437,7 @@ test "RestoreOptions.keep_log_files preserves WAL during restore" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             db_path,
             .{
                 .create_if_missing = true,
@@ -6377,6 +6473,7 @@ test "RestoreOptions.keep_log_files preserves WAL during restore" {
     {
         var db, const families = try DB.open(
             allocator,
+            std.testing.io,
             restore_path,
             .{
                 .create_if_missing = false,

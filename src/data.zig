@@ -15,10 +15,7 @@ pub const Data = struct {
         self.free(@ptrCast(@constCast(self.data.ptr)));
     }
 
-    pub fn format(
-        self: Data,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: Data, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(self.data);
     }
 };
@@ -44,9 +41,9 @@ test "Data format and copy helpers" {
     defer data.deinit();
 
     var buffer: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    try data.format(stream.writer());
-    try std.testing.expectEqualSlices(u8, text, stream.getWritten());
+    var stream = std.Io.Writer.fixed(&buffer);
+    try data.format(&stream);
+    try std.testing.expectEqualSlices(u8, text, stream.buffered());
 
     const copied = try copy(allocator, @ptrCast(text.ptr));
     defer allocator.free(copied);
@@ -85,9 +82,9 @@ test "Data format with different content" {
     defer data.deinit();
 
     var buffer: [32]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    try data.format(stream.writer());
-    try std.testing.expectEqualSlices(u8, text, stream.getWritten());
+    var stream = std.Io.Writer.fixed(&buffer);
+    try data.format(&stream);
+    try std.testing.expectEqualSlices(u8, text, stream.buffered());
 }
 
 test "Data deinit is single-use - not idempotent" {
