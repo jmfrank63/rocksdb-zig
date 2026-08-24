@@ -62,7 +62,9 @@ if (-not $vsPath) {
         exit 1
     }
 
-    $vsPath = & $vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    # -prerelease so Preview / Insiders installs are discovered too; without it
+    # vswhere reports nothing on machines that only have a prerelease VS.
+    $vsPath = & $vswhere -prerelease -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if (-not $vsPath) {
         Write-Host "ERROR: Visual Studio with C++ tools not found." -ForegroundColor Red
         Set-Location $ProjectRoot
