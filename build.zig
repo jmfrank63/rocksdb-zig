@@ -4,6 +4,7 @@ const ResolvedTarget = Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
 
 pub fn build(b: *Build) !void {
+    const io = b.graph.io;
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -46,7 +47,7 @@ pub fn build(b: *Build) !void {
     if (target.result.os.tag == .windows and effective_use_msvc_lib) {
         // First, check if vendor/rocksdb exists
         const vendor_rocksdb_exists = blk: {
-            std.fs.cwd().access("vendor/rocksdb", .{}) catch break :blk false;
+            std.Io.Dir.cwd().access(io, "vendor/rocksdb", .{}) catch break :blk false;
             break :blk true;
         };
 
@@ -72,7 +73,7 @@ pub fn build(b: *Build) !void {
         // Always create build step if use_msvc_compiler is set,
         // or if the library doesn't exist yet.
         const lib_exists = blk: {
-            std.fs.cwd().access(vendor_lib_path, .{}) catch break :blk false;
+            std.Io.Dir.cwd().access(io, vendor_lib_path, .{}) catch break :blk false;
             break :blk true;
         };
 
@@ -155,6 +156,8 @@ fn addRocksDB(
     use_msvc_compiler: bool,
     maybe_rocksdb_build_step: ?*Build.Step,
 ) !*Build.Module {
+    const io = b.graph.io;
+
     // Validate MSVC compiler option first
     if (use_msvc_compiler) {
         if (target.result.os.tag != .windows or target.result.abi != .msvc) {
@@ -177,7 +180,7 @@ fn addRocksDB(
 
     // Check if vendor/rocksdb exists for MSVC builds
     const use_vendor_rocksdb = blk: {
-        std.fs.cwd().access("vendor/rocksdb", .{}) catch break :blk false;
+        std.Io.Dir.cwd().access(io, "vendor/rocksdb", .{}) catch break :blk false;
         break :blk target.result.abi == .msvc;
     };
 
@@ -223,7 +226,7 @@ fn addRocksDB(
             }
 
             // Otherwise check if it exists
-            const lib_file = std.fs.cwd().openFile(vendor_lib_path, .{}) catch {
+            const lib_file = std.Io.Dir.cwd().openFile(io, vendor_lib_path, .{}) catch {
                 std.debug.print("\n" ++ "=" ** 70 ++ "\n", .{});
                 std.debug.print("ERROR: MSVC RocksDB library not found\n", .{});
                 std.debug.print("=" ** 70 ++ "\n\n", .{});
@@ -234,20 +237,20 @@ fn addRocksDB(
                 std.debug.print("=" ** 70 ++ "\n", .{});
                 return error.LibraryNotFound;
             };
-            lib_file.close();
+            lib_file.close(io);
 
             break :blk vendor_lib_path;
         } else blk: {
             // Fall back to build/rocksdb_Release (always use Release to avoid debug CRT symbols)
             const release_path = "build/rocksdb_Release/rocksdb.lib";
             // Check if Release library exists
-            const release_file = std.fs.cwd().openFile(release_path, .{}) catch {
+            const release_file = std.Io.Dir.cwd().openFile(io, release_path, .{}) catch {
                 std.debug.print("ERROR: No MSVC RocksDB library found.\n", .{});
                 std.debug.print("       Clone RocksDB: git clone --depth=1 -b v10.9.1 https://github.com/facebook/rocksdb vendor/rocksdb\n", .{});
                 std.debug.print("       Then build: .\\scripts\\build_rocksdb.ps1 -BuildType Release\n", .{});
                 return error.LibraryNotFound;
             };
-            release_file.close();
+            release_file.close(io);
             std.debug.print("Using pre-built MSVC RocksDB library from build/rocksdb_Release\n", .{});
             break :blk release_path;
         };
@@ -374,10 +377,10 @@ fn buildRocksDB(
 ) !void {
     const t = target.result;
 
-    librocksdb.linkLibC();
+    librocksdb.root_module.link_libc = true;
     // Only link libc++ on non-MSVC targets; MSVC has its own C++ stdlib
     if (t.abi != .msvc) {
-        librocksdb.linkLibCpp();
+        librocksdb.root_module.link_libcpp = true;
     }
 
     var rocksdb_flags: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -390,9 +393,9 @@ fn buildRocksDB(
     });
     if (maybe_libsnappy != null) try rocksdb_flags.append(b.allocator, "-DSNAPPY=1");
 
-    librocksdb.addIncludePath(rocks_path.path(b, "include"));
-    librocksdb.addIncludePath(rocks_path.path(b, "."));
-    librocksdb.addCSourceFiles(.{
+    librocksdb.root_module.addIncludePath(rocks_path.path(b, "include"));
+    librocksdb.root_module.addIncludePath(rocks_path.path(b, "."));
+    librocksdb.root_module.addCSourceFiles(.{
         .root = rocks_path.path(b, "."),
         .files = &.{
             "cache/cache.cc",
@@ -734,7 +737,7 @@ fn buildRocksDB(
     // Tools are excluded for C-API-only builds to avoid linker errors
     // from missing stress test symbols (DbStressCustomCompressionManager)
     if (!c_api_only) {
-        librocksdb.addCSourceFiles(.{
+        librocksdb.root_module.addCSourceFiles(.{
             .root = rocks_path.path(b, "."),
             .files = &.{
                 "tools/block_cache_analyzer/block_cache_trace_analyzer.cc",
@@ -753,10 +756,10 @@ fn buildRocksDB(
         const snappy_dep = b.lazyDependency("snappy", .{}) orelse
             break :not_yet_fetched;
 
-        librocksdb.linkLibrary(libsnappy);
-        librocksdb.addIncludePath(snappy_dep.path("."));
+        librocksdb.root_module.linkLibrary(libsnappy);
+        librocksdb.root_module.addIncludePath(snappy_dep.path("."));
 
-        libsnappy.linkLibCpp();
+        libsnappy.root_module.link_libcpp = true;
 
         const flags = .{
             "-std=c++11",
@@ -764,7 +767,7 @@ fn buildRocksDB(
             "-Wno-sign-compare",
         };
 
-        libsnappy.addCSourceFiles(.{
+        libsnappy.root_module.addCSourceFiles(.{
             .root = snappy_dep.path("."),
             .files = &.{
                 "snappy-c.cc",
@@ -786,13 +789,13 @@ fn buildRocksDB(
             .HAVE_SYS_UIO_H_01 = @as(u8, @intFromBool(t.os.tag != .windows)),
         });
 
-        libsnappy.addIncludePath(build_version.getOutput().dirname());
-        librocksdb.addIncludePath(build_version.getOutput().dirname());
+        libsnappy.root_module.addIncludePath(build_version.getOutputFile().dirname());
+        librocksdb.root_module.addIncludePath(build_version.getOutputFile().dirname());
     }
 
     // platform dependent stuff
     if (t.cpu.arch == .aarch64) {
-        librocksdb.addCSourceFile(.{
+        librocksdb.root_module.addCSourceFile(.{
             .file = rocks_path.path(b, "util/crc32c_arm64.cc"),
             .flags = rocksdb_flags.items,
         });
@@ -801,7 +804,7 @@ fn buildRocksDB(
     if (t.os.tag != .windows) {
         librocksdb.root_module.addCMacro("ROCKSDB_PLATFORM_POSIX", "");
         librocksdb.root_module.addCMacro("ROCKSDB_LIB_IO_POSIX", "");
-        librocksdb.addCSourceFiles(.{
+        librocksdb.root_module.addCSourceFiles(.{
             .root = rocks_path.path(b, "."),
             .files = &.{
                 "port/port_posix.cc",
@@ -818,7 +821,7 @@ fn buildRocksDB(
         librocksdb.root_module.addCMacro("WIN64", "");
         librocksdb.root_module.addCMacro("NOMINMAX", "");
         librocksdb.root_module.addCMacro("_WINDOWS", "");
-        librocksdb.addCSourceFiles(.{
+        librocksdb.root_module.addCSourceFiles(.{
             .root = rocks_path.path(b, "."),
             .files = &.{
                 "port/win/env_win.cc",
@@ -830,8 +833,8 @@ fn buildRocksDB(
             },
             .flags = rocksdb_flags.items,
         });
-        librocksdb.linkSystemLibrary("rpcrt4");
-        librocksdb.linkSystemLibrary("shlwapi");
+        librocksdb.root_module.linkSystemLibrary("rpcrt4", .{});
+        librocksdb.root_module.linkSystemLibrary("shlwapi", .{});
     }
 
     const os_name = switch (t.os.tag) {
@@ -856,7 +859,7 @@ fn buildRocksDB(
         .ROCKSDB_PLUGIN_EXTERNS = null,
         .ROCKSDB_PLUGIN_BUILTINS = null,
     });
-    librocksdb.addCSourceFile(.{ .file = build_version.getOutput() });
+    librocksdb.root_module.addCSourceFile(.{ .file = build_version.getOutputFile() });
 
     b.installArtifact(librocksdb);
 }
