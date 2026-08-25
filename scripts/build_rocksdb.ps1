@@ -3,7 +3,9 @@
 
 param(
     [ValidateSet("Debug", "Release")]
-    [string]$BuildType = "Debug"
+    [string]$BuildType = "Debug",
+
+    [switch]$KeepObjects
 )
 
 $ErrorActionPreference = "Stop"
@@ -151,6 +153,8 @@ cmake "$RocksDBPath" `
     -DROCKSDB_BUILD_SHARED=OFF `
     -DWITH_TESTS=OFF `
     -DWITH_TOOLS=OFF `
+    -DWITH_CORE_TOOLS=OFF `
+    -DWITH_BENCHMARK_TOOLS=OFF `
     -DWITH_GFLAGS=OFF `
     -DWITH_SNAPPY=OFF `
     -DWITH_LZ4=OFF `
@@ -164,10 +168,27 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Build
+# RocksDB's own CMakeLists appends /Zi /d2Zi+ to CMAKE_CXX_FLAGS for MSVC
+# (CMakeLists.txt:219-220), after our *_FLAGS_RELEASE are applied, so there is
+# no cmake variable that removes them. A Release build has no use for them and
+# they dominate the object size. Ninja's command lines are the only place left
+# to take them out.
+if ($ConfigType -eq "Release") {
+    $ninjaFile = "build.ninja"
+    if (Test-Path $ninjaFile) {
+        $ninja = Get-Content $ninjaFile -Raw
+        $ninja = $ninja -replace ' /Zi(?= )', '' -replace ' /d2Zi\+(?= )', ''
+        Set-Content $ninjaFile $ninja -NoNewline
+        Write-Host "Stripped /Zi and /d2Zi+ from the Release command lines" -ForegroundColor Gray
+    }
+}
+
+# Build only the library. cmake --build with no target builds every target the
+# configure step produced, which is how ldb.exe and db_bench.exe were being
+# compiled and linked for a consumer that never runs them.
 Write-Host "Building RocksDB (this may take several minutes)..." -ForegroundColor Cyan
 Write-Host "Using parallel build with all available CPU cores..." -ForegroundColor Cyan
-cmake --build . --parallel
+cmake --build . --target rocksdb --parallel
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Build failed" -ForegroundColor Red
@@ -184,6 +205,22 @@ Get-Process mspdbsrv -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorA
 
 # Give Windows time to release file handles
 Start-Sleep -Milliseconds 500
+
+# The archive carries a copy of every object, so keeping both doubles the cost
+# for nothing. Dropping them costs the next incremental build, which does not
+# happen anyway -- build.zig only reruns this script when rocksdb.lib is absent.
+if (-not $KeepObjects) {
+    $objDir = Join-Path $buildDir "CMakeFiles"
+    if (Test-Path $objDir) {
+        $before = (Get-ChildItem $objDir -Recurse -Filter *.obj -ErrorAction SilentlyContinue |
+                   Measure-Object -Property Length -Sum).Sum
+        Get-ChildItem $objDir -Recurse -Filter *.obj -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        if ($before) {
+            Write-Host ("Removed {0:N0} MB of object files already archived into rocksdb.lib" -f ($before / 1MB)) -ForegroundColor Gray
+        }
+    }
+}
 
 Set-Location $ProjectRoot
 
