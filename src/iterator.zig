@@ -119,12 +119,14 @@ pub const RawIterator = struct {
         }
     }
 
+    fn borrowedByTheIterator(_: ?*anyopaque) callconv(.c) void {}
+
     fn keyImpl(self: Self) Data {
         var len: usize = undefined;
         const ret = rdb.rocksdb_iter_key(self.inner, &len);
         return .{
             .data = ret[0..len],
-            .free = rdb.rocksdb_free,
+            .free = borrowedByTheIterator,
         };
     }
 
@@ -133,7 +135,7 @@ pub const RawIterator = struct {
         const ret = rdb.rocksdb_iter_value(self.inner, &len);
         return .{
             .data = ret[0..len],
-            .free = rdb.rocksdb_free,
+            .free = borrowedByTheIterator,
         };
     }
 
@@ -456,4 +458,58 @@ test "RawIterator multiple operations" {
     // Test status doesn't error on valid iterator
     try raw.status(&err_str);
     try std.testing.expect(err_str == null);
+}
+
+test "an iterator entry does not carry rocksdb_free: those bytes belong to the iterator" {
+    const database = @import("database.zig");
+    const allocator = std.testing.allocator;
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(path);
+
+    var err_str: ?Data = null;
+    const opened, const cfs = try database.DB.open(
+        allocator,
+        std.testing.io,
+        path,
+        .{ .create_if_missing = true, .create_missing_column_families = true },
+        null,
+        false,
+        &err_str,
+    );
+    defer {
+        opened.deinit();
+        database.DB.freeColumnFamilies(allocator, cfs);
+    }
+
+    const db = opened.withDefaultColumnFamily(cfs[0].handle);
+    try db.put(null, "k1", "v1", .{}, &err_str);
+    try db.put(null, "k2", "v2", .{}, &err_str);
+
+    var it = db.iterator(null, .forward, null, .{});
+    defer it.deinit();
+
+    const first = (try it.next(&err_str)) orelse return error.IteratorYieldedNothing;
+
+    if (first[0].free == rdb.rocksdb_free) {
+        std.debug.print(
+            \\
+            \\rocksdb_iter_key and rocksdb_iter_value return memory owned by the
+            \\iterator. It is invalidated by the next seek or next() and it was
+            \\never allocated for the caller. Data.deinit calls Data.free, and
+            \\Data documents itself as "allocated by rocksdb and must be freed by
+            \\rocksdb" - so a caller who honours that contract on an iterator
+            \\entry hands the C heap a pointer it never gave out.
+            \\
+        , .{});
+        return error.IteratorEntryClaimsToOwnBorrowedBytes;
+    }
+
+    first[0].deinit();
+    first[1].deinit();
+
+    const second = (try it.next(&err_str)) orelse return error.IteratorStoppedAfterDeinit;
+    try std.testing.expect(second[0].data.len > 0);
 }

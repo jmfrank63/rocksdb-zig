@@ -3,7 +3,11 @@ const rdb = @import("rocksdb");
 
 const Allocator = std.mem.Allocator;
 
-/// data that was allocated by rocksdb and must be freed by rocksdb
+/// bytes rocksdb handed back, with the function that releases them.
+/// Some of those bytes are owned by the caller and some are borrowed from
+/// a live iterator, so the release function is carried per value rather
+/// than assumed: a borrowed entry carries a no-op and deinit stays safe to
+/// call on anything this library returns.
 pub const Data = struct {
     data: []const u8,
     free: *const fn (?*anyopaque) callconv(.c) void,
