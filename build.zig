@@ -47,7 +47,7 @@ pub fn build(b: *Build) !void {
     if (target.result.os.tag == .windows and effective_use_msvc_lib) {
         // First, check if vendor/rocksdb exists
         const vendor_rocksdb_exists = blk: {
-            std.Io.Dir.cwd().access(io, "vendor/rocksdb", .{}) catch break :blk false;
+            b.build_root.handle.access(io, "vendor/rocksdb", .{}) catch break :blk false;
             break :blk true;
         };
 
@@ -73,7 +73,7 @@ pub fn build(b: *Build) !void {
         // Always create build step if use_msvc_compiler is set,
         // or if the library doesn't exist yet.
         const lib_exists = blk: {
-            std.Io.Dir.cwd().access(io, vendor_lib_path, .{}) catch break :blk false;
+            b.build_root.handle.access(io, vendor_lib_path, .{}) catch break :blk false;
             break :blk true;
         };
 
@@ -180,7 +180,7 @@ fn addRocksDB(
 
     // Check if vendor/rocksdb exists for MSVC builds
     const use_vendor_rocksdb = blk: {
-        std.Io.Dir.cwd().access(io, "vendor/rocksdb", .{}) catch break :blk false;
+        b.build_root.handle.access(io, "vendor/rocksdb", .{}) catch break :blk false;
         break :blk target.result.abi == .msvc;
     };
 
@@ -226,7 +226,7 @@ fn addRocksDB(
             }
 
             // Otherwise check if it exists
-            const lib_file = std.Io.Dir.cwd().openFile(io, vendor_lib_path, .{}) catch {
+            const lib_file = b.build_root.handle.openFile(io, vendor_lib_path, .{}) catch {
                 std.debug.print("\n" ++ "=" ** 70 ++ "\n", .{});
                 std.debug.print("ERROR: MSVC RocksDB library not found\n", .{});
                 std.debug.print("=" ** 70 ++ "\n\n", .{});
@@ -244,7 +244,7 @@ fn addRocksDB(
             // Fall back to build/rocksdb_Release (always use Release to avoid debug CRT symbols)
             const release_path = "build/rocksdb_Release/rocksdb.lib";
             // Check if Release library exists
-            const release_file = std.Io.Dir.cwd().openFile(io, release_path, .{}) catch {
+            const release_file = b.build_root.handle.openFile(io, release_path, .{}) catch {
                 std.debug.print("ERROR: No MSVC RocksDB library found.\n", .{});
                 std.debug.print("       Clone RocksDB: git clone --depth=1 -b v10.9.1 https://github.com/facebook/rocksdb vendor/rocksdb\n", .{});
                 std.debug.print("       Then build: .\\scripts\\build_rocksdb.ps1 -BuildType Release\n", .{});
