@@ -135,8 +135,14 @@ $env:_LINK_ = ""
 $ReleaseFlags = "/O2 /Ob2 /DEBUG:NONE /W4 /MP"
 $DebugFlags = "/Zi /Ob0 /Od /RTC1 /W4 /MP"
 
+# PORTABLE=1 keeps MSVC at its baseline instruction set. RocksDB's own default
+# is 0, which for MSVC means /arch:AVX2, and that flag becomes a hard
+# requirement of every binary this library is linked into. The fleet runs
+# Pentium G4560 / G5400 parts, which have no AVX2, so an AVX2 build dies at
+# process start with 0xC000001D before it can log why.
 cmake "$RocksDBPath" `
     -G "Ninja" `
+    -DPORTABLE=1 `
     -DCMAKE_BUILD_TYPE="$ConfigType" `
     -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
     -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$( if ($ConfigType -eq 'Debug') { 'Debug' } )" `
