@@ -2886,6 +2886,18 @@ pub const ColumnFamilyOptions = struct {
     /// Default: null (merge operations will fail)
     merge_operator: ?*MergeOperator = null,
 
+    /// Write buffer (memtable) size of this column family.
+    /// Default: null (RocksDB's 64 MiB)
+    write_buffer_size: ?usize = null,
+
+    /// Write buffers this column family may hold in memory at once.
+    /// Default: null (RocksDB's 2)
+    max_write_buffer_number: ?i32 = null,
+
+    /// Block compression of this column family.
+    /// Default: null (RocksDB's snappy if supported)
+    compression: ?Compression = null,
+
     fn convert(self: *const ColumnFamilyOptions) MergeOperatorError!*rdb.struct_rocksdb_options_t {
         // Validate handle before allocating options to avoid leaks on error
         if (self.merge_operator) |op| {
@@ -2895,6 +2907,10 @@ pub const ColumnFamilyOptions = struct {
         }
 
         const opts = rdb.rocksdb_options_create().?;
+
+        if (self.write_buffer_size) |size| rdb.rocksdb_options_set_write_buffer_size(opts, size);
+        if (self.max_write_buffer_number) |n| rdb.rocksdb_options_set_max_write_buffer_number(opts, n);
+        if (self.compression) |c| rdb.rocksdb_options_set_compression(opts, @intFromEnum(c));
 
         // Set merge operator if specified and consume the handle to prevent double-free
         if (self.merge_operator) |op| {
@@ -2906,6 +2922,89 @@ pub const ColumnFamilyOptions = struct {
         return opts;
     }
 };
+
+fn columnFamilyOptionsNameAWriteBuffer() bool {
+    return @hasField(ColumnFamilyOptions, "write_buffer_size") and @hasField(ColumnFamilyOptions, "compression");
+}
+
+fn newestOptionsFile(allocator: Allocator, dir: std.Io.Dir) ![]u8 {
+    var newest: ?[]u8 = null;
+    errdefer if (newest) |n| allocator.free(n);
+    var it = dir.iterate();
+    while (try it.next(std.testing.io)) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, "OPTIONS-")) continue;
+        if (newest) |n| {
+            if (std.mem.order(u8, entry.name, n) != .gt) continue;
+            allocator.free(n);
+        }
+        newest = try allocator.dupe(u8, entry.name);
+    }
+    const name = newest orelse return error.NoOptionsFile;
+    defer allocator.free(name);
+    newest = null;
+    return dir.readFileAlloc(std.testing.io, name, allocator, .limited(1 << 20));
+}
+
+fn columnFamilyOption(text: []const u8, family: []const u8, key: []const u8) ?[]const u8 {
+    var header_buf: [128]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "[CFOptions \"{s}\"]", .{family}) catch return null;
+    const at = std.mem.indexOf(u8, text, header) orelse return null;
+    const section_end = std.mem.indexOfPos(u8, text, at + header.len, "\n[") orelse text.len;
+    var lines = std.mem.splitScalar(u8, text[at + header.len .. section_end], '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        if (line.len <= key.len or line[key.len] != '=') continue;
+        return line[key.len + 1 ..];
+    }
+    return null;
+}
+
+test "a column family opens with the write buffer and the compression its options name" {
+    if (comptime !columnFamilyOptionsNameAWriteBuffer()) {
+        std.debug.print(
+            \\
+            \\ColumnFamilyOptions converts to rocksdb_options_create() with nothing set but a merge
+            \\operator, so every column family opens with RocksDB's defaults (a 64 MiB write buffer,
+            \\snappy) whatever DBOptions says: DBOptions reaches only the database's own options, and
+            \\the "default" family is opened with its own column family options too.
+            \\  missing: ColumnFamilyOptions.write_buffer_size and .compression
+            \\
+        , .{});
+        return error.AColumnFamilyCannotNameItsWriteBuffer;
+    }
+    const allocator = std.testing.allocator;
+    var dir = std.testing.tmpDir(.{ .iterate = true });
+    defer dir.cleanup();
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(path);
+
+    var err_str: ?Data = null;
+    defer if (err_str) |e| e.deinit();
+    {
+        var db, const families = try DB.open(
+            allocator,
+            std.testing.io,
+            path,
+            .{ .create_if_missing = true, .create_missing_column_families = true },
+            &.{
+                .{ .name = "default", .options = .{ .write_buffer_size = 8 * 1024 * 1024, .compression = .none } },
+                .{ .name = "small", .options = .{ .write_buffer_size = 1024 * 1024, .compression = .none } },
+            },
+            false,
+            &err_str,
+        );
+        db.deinit();
+        DB.freeColumnFamilies(allocator, families);
+    }
+
+    const text = try newestOptionsFile(allocator, dir.dir);
+    defer allocator.free(text);
+    try std.testing.expectEqualStrings("8388608", columnFamilyOption(text, "default", "write_buffer_size") orelse return error.NoWriteBufferForDefault);
+    try std.testing.expectEqualStrings("1048576", columnFamilyOption(text, "small", "write_buffer_size") orelse return error.NoWriteBufferForSmall);
+    try std.testing.expectEqualStrings("kNoCompression", columnFamilyOption(text, "default", "compression") orelse return error.NoCompressionForDefault);
+    try std.testing.expectEqualStrings("kNoCompression", columnFamilyOption(text, "small", "compression") orelse return error.NoCompressionForSmall);
+}
 
 /// The metadata that describes a SST file
 pub const LiveFile = struct {
