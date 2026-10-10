@@ -3,6 +3,8 @@ const Build = std.Build;
 const ResolvedTarget = Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
 
+const rule_equals = @as([70]u8, @splat('='));
+
 pub fn build(b: *Build) !void {
     const io = b.graph.io;
     const target = b.standardTargetOptions(.{});
@@ -47,20 +49,20 @@ pub fn build(b: *Build) !void {
     if (target.result.os.tag == .windows and effective_use_msvc_lib) {
         // First, check if vendor/rocksdb exists
         const vendor_rocksdb_exists = blk: {
-            b.build_root.handle.access(io, "vendor/rocksdb", .{}) catch break :blk false;
+            b.root.access(io, "vendor/rocksdb", .{}) catch break :blk false;
             break :blk true;
         };
 
         if (!vendor_rocksdb_exists) {
-            std.debug.print("\n" ++ "=" ** 70 ++ "\n", .{});
+            std.debug.print("\n" ++ rule_equals ++ "\n", .{});
             std.debug.print("ERROR: vendor/rocksdb not found\n", .{});
-            std.debug.print("=" ** 70 ++ "\n\n", .{});
+            std.debug.print(rule_equals ++ "\n\n", .{});
             std.debug.print("RocksDB submodule is not initialized.\n\n", .{});
             std.debug.print("SOLUTION: Initialize the submodule:\n\n", .{});
             std.debug.print("    git submodule update --init --recursive\n\n", .{});
             std.debug.print("Or clone RocksDB manually:\n\n", .{});
             std.debug.print("    git clone --depth 1 --branch v10.9.1 https://github.com/facebook/rocksdb.git vendor/rocksdb\n\n", .{});
-            std.debug.print("=" ** 70 ++ "\n", .{});
+            std.debug.print(rule_equals ++ "\n", .{});
             return error.RocksDBSubmoduleNotInitialized;
         }
 
@@ -73,7 +75,7 @@ pub fn build(b: *Build) !void {
         // Always create build step if use_msvc_compiler is set,
         // or if the library doesn't exist yet.
         const lib_exists = blk: {
-            b.build_root.handle.access(io, vendor_lib_path, .{}) catch break :blk false;
+            b.root.access(io, vendor_lib_path, .{}) catch break :blk false;
             break :blk true;
         };
 
@@ -120,7 +122,7 @@ pub fn build(b: *Build) !void {
 
     const test_optimize = if (effective_use_msvc_lib) optimize else optimize; // Use same optimize mode
 
-    const bindings_mod_for_test = b.addModule("bindings", .{
+    const bindings_mod_for_test = b.createModule(.{
         .target = target,
         .optimize = test_optimize,
         .root_source_file = b.path("src/lib.zig"),
@@ -198,7 +200,7 @@ fn addRocksDB(
 
     // Check if vendor/rocksdb exists for MSVC builds
     const use_vendor_rocksdb = blk: {
-        b.build_root.handle.access(io, "vendor/rocksdb", .{}) catch break :blk false;
+        b.root.access(io, "vendor/rocksdb", .{}) catch break :blk false;
         break :blk target.result.abi == .msvc;
     };
 
@@ -244,15 +246,15 @@ fn addRocksDB(
             }
 
             // Otherwise check if it exists
-            const lib_file = b.build_root.handle.openFile(io, vendor_lib_path, .{}) catch {
-                std.debug.print("\n" ++ "=" ** 70 ++ "\n", .{});
+            const lib_file = b.root.openFile(io, vendor_lib_path, .{}) catch {
+                std.debug.print("\n" ++ rule_equals ++ "\n", .{});
                 std.debug.print("ERROR: MSVC RocksDB library not found\n", .{});
-                std.debug.print("=" ** 70 ++ "\n\n", .{});
+                std.debug.print(rule_equals ++ "\n\n", .{});
                 std.debug.print("Expected location: {s}\n\n", .{vendor_lib_path});
                 std.debug.print("NOTE: The build system should have built this automatically.\n", .{});
                 std.debug.print("      If you see this error, try building manually:\n\n", .{});
                 std.debug.print("    .\\scripts\\build_rocksdb.ps1 -BuildType Release\n\n", .{});
-                std.debug.print("=" ** 70 ++ "\n", .{});
+                std.debug.print(rule_equals ++ "\n", .{});
                 return error.LibraryNotFound;
             };
             lib_file.close(io);
@@ -262,7 +264,7 @@ fn addRocksDB(
             // Fall back to build/rocksdb_Release (always use Release to avoid debug CRT symbols)
             const release_path = "build/rocksdb_Release/rocksdb.lib";
             // Check if Release library exists
-            const release_file = b.build_root.handle.openFile(io, release_path, .{}) catch {
+            const release_file = b.root.openFile(io, release_path, .{}) catch {
                 std.debug.print("ERROR: No MSVC RocksDB library found.\n", .{});
                 std.debug.print("       Clone RocksDB: git clone --depth=1 -b v10.9.1 https://github.com/facebook/rocksdb vendor/rocksdb\n", .{});
                 std.debug.print("       Then build: .\\scripts\\build_rocksdb.ps1 -BuildType Release\n", .{});

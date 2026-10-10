@@ -13,7 +13,7 @@ jobs:
       - name: setup-zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: lint
         run: |
@@ -29,7 +29,7 @@ jobs:
       - name: setup-zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: test (default - full C++ API)
         run: |

@@ -2533,7 +2533,13 @@ test "DBOptions accepts compression_opts (smoke test)" {
     db = db.withDefaultColumnFamily(cf);
 
     // Write compressible data to verify compression is working
-    const test_data = "This is a test string that should compress well. " ** 20;
+    const test_data = comptime blk: {
+        const phrase = "This is a test string that should compress well. ";
+        var repeated: [phrase.len * 20]u8 = undefined;
+        for (0..20) |i| @memcpy(repeated[i * phrase.len ..][0..phrase.len], phrase);
+        const fixed = repeated;
+        break :blk &fixed;
+    };
     try db.put(null, "compression_test", test_data, .{}, &err_str);
     const val = try db.get(null, "compression_test", .{}, &err_str);
     defer if (val) |v| v.deinit();
@@ -2819,34 +2825,34 @@ fn testDBOptions(test_subject: DBOptions, expected: *rdb.struct_rocksdb_options_
     const actual = test_subject.convert();
     defer rdb.rocksdb_options_destroy(actual);
 
-    inline for (@typeInfo(DBOptions).@"struct".fields) |field| {
+    inline for (@typeInfo(DBOptions).@"struct".field_names) |field_name| {
         // Skip fields that:
         // - Don't have C API getters (block_cache, block_size, compression_opts, enable_statistics, filter_policy, index_type, whole_key_filtering, dynamic)
         // - Have getters that may not exist in all RocksDB versions (use_direct_reads, use_direct_io_for_flush_and_compaction)
         // - Priority 2 options without reliable getters across versions (target_file_size_base, max_bytes_for_level_base, etc.)
         // - dynamic is tested elsewhere (uses rocksdb_set_options, not direct getters)
-        if (comptime std.mem.eql(u8, field.name, "block_cache") or
-            std.mem.eql(u8, field.name, "block_size") or
-            std.mem.eql(u8, field.name, "compression_opts") or
-            std.mem.eql(u8, field.name, "enable_statistics") or
-            std.mem.eql(u8, field.name, "filter_policy") or
-            std.mem.eql(u8, field.name, "whole_key_filtering") or
-            std.mem.eql(u8, field.name, "index_type") or
-            std.mem.eql(u8, field.name, "use_direct_reads") or
-            std.mem.eql(u8, field.name, "use_direct_io_for_flush_and_compaction") or
-            std.mem.eql(u8, field.name, "target_file_size_base") or
-            std.mem.eql(u8, field.name, "target_file_size_multiplier") or
-            std.mem.eql(u8, field.name, "max_bytes_for_level_base") or
-            std.mem.eql(u8, field.name, "max_bytes_for_level_multiplier") or
-            std.mem.eql(u8, field.name, "level_compaction_dynamic_level_bytes") or
-            std.mem.eql(u8, field.name, "allow_concurrent_memtable_write") or
-            std.mem.eql(u8, field.name, "enable_pipelined_write") or
-            std.mem.eql(u8, field.name, "max_total_wal_size") or
-            std.mem.eql(u8, field.name, "dynamic"))
+        if (comptime std.mem.eql(u8, field_name, "block_cache") or
+            std.mem.eql(u8, field_name, "block_size") or
+            std.mem.eql(u8, field_name, "compression_opts") or
+            std.mem.eql(u8, field_name, "enable_statistics") or
+            std.mem.eql(u8, field_name, "filter_policy") or
+            std.mem.eql(u8, field_name, "whole_key_filtering") or
+            std.mem.eql(u8, field_name, "index_type") or
+            std.mem.eql(u8, field_name, "use_direct_reads") or
+            std.mem.eql(u8, field_name, "use_direct_io_for_flush_and_compaction") or
+            std.mem.eql(u8, field_name, "target_file_size_base") or
+            std.mem.eql(u8, field_name, "target_file_size_multiplier") or
+            std.mem.eql(u8, field_name, "max_bytes_for_level_base") or
+            std.mem.eql(u8, field_name, "max_bytes_for_level_multiplier") or
+            std.mem.eql(u8, field_name, "level_compaction_dynamic_level_bytes") or
+            std.mem.eql(u8, field_name, "allow_concurrent_memtable_write") or
+            std.mem.eql(u8, field_name, "enable_pipelined_write") or
+            std.mem.eql(u8, field_name, "max_total_wal_size") or
+            std.mem.eql(u8, field_name, "dynamic"))
         {
             continue;
         }
-        const getter = "rocksdb_options_get_" ++ field.name;
+        const getter = "rocksdb_options_get_" ++ field_name;
         const expected_value = @call(.auto, @field(rdb, getter), .{expected});
         const actual_value = @call(.auto, @field(rdb, getter), .{actual});
         try std.testing.expectEqual(expected_value, actual_value);
@@ -5998,7 +6004,7 @@ test "Checkpoint.create saves consistent snapshot" {
     defer checkpoint_dir.cleanup();
     const checkpoint_path = try checkpoint_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(checkpoint_path);
-    const checkpoint_subdir = try std.fs.path.join(allocator, &.{ checkpoint_path, "checkpoint" });
+    const checkpoint_subdir = try std.fs.path.joinZ(allocator, &.{ checkpoint_path, "checkpoint" });
     defer allocator.free(checkpoint_subdir);
 
     var err_str: ?Data = null;
@@ -6243,7 +6249,7 @@ test "BackupEngine MINIMAL restore test" {
     const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
     // THIS IS THE KEY DIFFERENCE - full test uses a subdirectory!
-    const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
+    const restore_path = try std.fs.path.joinZ(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
 
     var err_str: ?Data = null;
@@ -6319,7 +6325,7 @@ test "BackupEngine.restoreFromLatestBackup restores data correctly" {
     // clock_cache.cc:2086 (GetRefcount check).
     //
     // Skip in Debug mode only - Release mode works fine
-    if (@import("builtin").mode == .Debug) return error.SkipZigTest;
+    if (@import("builtin").mode == .debug) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
     var db_dir = std.testing.tmpDir(.{});
@@ -6336,7 +6342,7 @@ test "BackupEngine.restoreFromLatestBackup restores data correctly" {
     defer restore_dir.cleanup();
     const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
-    const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
+    const restore_path = try std.fs.path.joinZ(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
 
     var err_str: ?Data = null;
@@ -6430,7 +6436,7 @@ test "BackupEngine.restoreFromBackup restores specific backup by ID" {
     defer restore_dir.cleanup();
     const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
-    const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
+    const restore_path = try std.fs.path.joinZ(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
 
     var err_str: ?Data = null;
@@ -6526,7 +6532,7 @@ test "RestoreOptions.keep_log_files preserves WAL during restore" {
     defer restore_dir.cleanup();
     const restore_base = try restore_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(restore_base);
-    const restore_path = try std.fs.path.join(allocator, &.{ restore_base, "restored_db" });
+    const restore_path = try std.fs.path.joinZ(allocator, &.{ restore_base, "restored_db" });
     defer allocator.free(restore_path);
 
     var err_str: ?Data = null;
