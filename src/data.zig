@@ -131,3 +131,10 @@ test "Copy with large buffer" {
     try std.testing.expectEqual(large_buf.len, copied.len);
     try std.testing.expectEqualSlices(u8, &large_buf, copied);
 }
+
+test "ABI manifest: data.zig" {
+    const root = @import("root");
+    if (@hasDecl(root, "abi_emit")) root.abi_emit("Libraries/rocksdb-zig/src/data.zig", .{
+        .{ "Data/free", fn (?*anyopaque) callconv(.c) void },
+    });
+}

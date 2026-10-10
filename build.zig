@@ -133,6 +133,24 @@ pub fn build(b: *Build) !void {
 
     const test_step = b.step("test", "Run bindings tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    const abi_manifest_step = b.step("abi-manifest", "Print the layout and calling-convention manifest of the ABI types");
+    const abi_manifest_module = b.createModule(.{
+        .root_source_file = b.path("src/abi_manifest_roots.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    var abi_manifest_imports = bindings_mod_for_test.import_table.iterator();
+    while (abi_manifest_imports.next()) |entry| abi_manifest_module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    const abi_manifest_tests = b.addTest(.{
+        .root_module = abi_manifest_module,
+        .filters = &.{"ABI manifest"},
+        .test_runner = .{ .path = b.path("../../src/tools/lib/abi_manifest.zig"), .mode = .simple },
+    });
+    const abi_manifest_run = b.addRunArtifact(abi_manifest_tests);
+    abi_manifest_run.stdio = .inherit;
+    abi_manifest_step.dependOn(&abi_manifest_run.step);
 }
 
 /// Create a zig module for the bare C++ library by exposing its C api.

@@ -6594,3 +6594,21 @@ test "RestoreOptions.keep_log_files preserves WAL during restore" {
         try std.testing.expectEqualSlices(u8, "test_value", val.?.data);
     }
 }
+
+test "ABI manifest: database.zig" {
+    const root = @import("root");
+    if (@hasDecl(root, "abi_emit")) root.abi_emit("Libraries/rocksdb-zig/src/database.zig", .{
+        .{ "MergeOperator/destructor", fn (s: ?*anyopaque) callconv(.c) void },
+        .{ "MergeOperator/fullMerge", fn ( s: ?*anyopaque, key: [*c]const u8, key_len: usize, existing_value: [*c]const u8, existing_value_len: usize, operands_list: [*c]const [*c]const u8, operands_list_len: [*c]const usize, num_operands: c_int, success: [*c]u8, new_value_len: [*c]usize, ) callconv(.c) [*c]u8 },
+        .{ "MergeOperator/deleteValue", fn (_: ?*anyopaque, value: [*c]const u8, value_len: usize) callconv(.c) void },
+        .{ "MergeOperator/name", fn (_: ?*anyopaque) callconv(.c) [*c]const u8 },
+        .{ "MergeOperator/destructor#2", fn (_: ?*anyopaque) callconv(.c) void },
+        .{ "MergeOperator/fullMerge#2", fn ( _: ?*anyopaque, key: [*c]const u8, key_len: usize, existing_value: [*c]const u8, existing_value_len: usize, operands_list: [*c]const [*c]const u8, operands_list_len: [*c]const usize, num_operands: c_int, success: [*c]u8, new_value_len: [*c]usize, ) callconv(.c) [*c]u8 },
+        .{ "MergeOperator/deleteValue#2", fn (_: ?*anyopaque, value: [*c]const u8, value_len: usize) callconv(.c) void },
+        .{ "MergeOperator/name#2", fn (_: ?*anyopaque) callconv(.c) [*c]const u8 },
+        .{ "MergeOperator/destructor#3", fn (_: ?*anyopaque) callconv(.c) void },
+        .{ "MergeOperator/fullMerge#3", fn ( _: ?*anyopaque, key: [*c]const u8, key_len: usize, existing_value: [*c]const u8, existing_value_len: usize, operands_list: [*c]const [*c]const u8, operands_list_len: [*c]const usize, num_operands: c_int, success: [*c]u8, new_value_len: [*c]usize, ) callconv(.c) [*c]u8 },
+        .{ "MergeOperator/deleteValue#3", fn (_: ?*anyopaque, value: [*c]const u8, value_len: usize) callconv(.c) void },
+        .{ "MergeOperator/name#3", fn (_: ?*anyopaque) callconv(.c) [*c]const u8 },
+    });
+}

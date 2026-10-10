@@ -513,3 +513,10 @@ test "an iterator entry does not carry rocksdb_free: those bytes belong to the i
     const second = (try it.next(&err_str)) orelse return error.IteratorStoppedAfterDeinit;
     try std.testing.expect(second[0].data.len > 0);
 }
+
+test "ABI manifest: iterator.zig" {
+    const root = @import("root");
+    if (@hasDecl(root, "abi_emit")) root.abi_emit("Libraries/rocksdb-zig/src/iterator.zig", .{
+        .{ "RawIterator/borrowedByTheIterator", fn (_: ?*anyopaque) callconv(.c) void },
+    });
+}
